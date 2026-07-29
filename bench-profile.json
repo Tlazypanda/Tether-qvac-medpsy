@@ -1,43 +1,11 @@
 {
-  "ts": "2026-06-02T09:21:27.352Z",
-  "platform": "linux",
-  "arch": "x64",
-  "backend": "gpu",
+  "_comment": "Placeholder — run `npm run bench` on THIS device to populate it. Upstream Conduit committed a profile measured on the author's Linux/RTX-4050 box; those numbers are not yours and are not for a medical model. A node with an unpopulated profile still serves MedPsy-4B, it just advertises 0 tok/s until benchmarked.",
+  "ts": null,
+  "platform": null,
+  "arch": null,
+  "backend": "unknown",
   "minSellTps": 10,
-  "models": [
-    {
-      "id": "QWEN3_600M_INST_Q4",
-      "loaded": true,
-      "loadMs": 2049,
-      "backend": "gpu",
-      "ttftMs": 20.995,
-      "tps": 312.5448212821616
-    },
-    {
-      "id": "LLAMA_TOOL_CALLING_1B_INST_Q4_K",
-      "loaded": true,
-      "loadMs": 2942,
-      "backend": "gpu",
-      "ttftMs": 21.675,
-      "tps": 182.61504747991233
-    },
-    {
-      "id": "QWEN3_1_7B_INST_Q4",
-      "loaded": true,
-      "loadMs": 231918,
-      "backend": "gpu",
-      "ttftMs": 168.172,
-      "tps": 118.02008600219665
-    },
-    {
-      "id": "QWEN3_4B_INST_Q4_K_M",
-      "loaded": true,
-      "loadMs": 548611,
-      "backend": "gpu",
-      "ttftMs": 85.775,
-      "tps": 59.42335575574624
-    }
-  ],
-  "topSellable": "QWEN3_4B_INST_Q4_K_M",
-  "localDraft": "QWEN3_600M_INST_Q4"
+  "models": [],
+  "topSellable": null,
+  "localDraft": null
 }

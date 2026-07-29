@@ -53,25 +53,32 @@
       "output": "release"
     },
     "mac": {
-      "target": ["dmg"],
+      "target": [
+        "dmg"
+      ],
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.png",
       "artifactName": "Conduit-${version}-${arch}.${ext}",
       "identity": null
     },
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "build/icon.png",
       "artifactName": "Conduit-${version}-Setup.${ext}"
     },
     "linux": {
-      "target": ["AppImage", "deb"],
+      "target": [
+        "AppImage",
+        "deb"
+      ],
       "category": "Development",
       "icon": "build/icon.png"
     }
   },
   "dependencies": {
-    "@qvac/sdk": "^0.12.0",
+    "@qvac/sdk": "^0.16.0",
     "@tetherto/wdk-wallet-evm": "^1.0.0-beta.13",
     "b4a": "^1.8.1",
     "hyperdht": "^6.32.0",

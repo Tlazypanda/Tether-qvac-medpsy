@@ -2,10 +2,11 @@
 // runs the real completion ON the seller's GPU over an E2E-encrypted P2P link (weights never move).
 // Run as a subprocess:  env CONSUMER_SEED, PROVIDER_PUBKEY, MODEL (constant name), PROMPT, LABEL.
 import { randomSeedHex } from '../core/identity';
+import { MEDPSY_MODEL } from '../core/medconsult';
 
 const seedHex = process.env.CONSUMER_SEED || randomSeedHex();
 const providerPub = (process.env.PROVIDER_PUBKEY || '').trim();
-const modelName = process.env.MODEL || 'QWEN3_4B_INST_Q4_K_M';
+const modelName = process.env.MODEL || MEDPSY_MODEL;
 const prompt = process.env.PROMPT || 'In one sentence, what is a stablecoin?';
 const fallback = process.env.FALLBACK === '1';
 const label = process.env.LABEL || 'buyer';

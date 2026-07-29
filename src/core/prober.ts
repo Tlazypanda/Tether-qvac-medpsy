@@ -2,10 +2,14 @@
 //
 // Walks a model ladder (small → large): loads each, runs a short completion, records real
 // load time + TTFT + tokens/sec + backend (gpu/cpu), then unloads. The largest model that
-// loads AND clears a min-tps bar becomes `topSellable`; the smallest that loads is the
-// `localDraft` (the buyer-role model). No pricing here — that's `pricing.ts` (Phase 3).
+// loads AND clears a min-tps bar becomes `topSellable`. No pricing here — that's `pricing.ts`.
+//
+// Fork note: `localDraft` (the smallest model that loaded) is retained in the profile for
+// compatibility, but this fork never uses it — the asker carries no model at all, so there is
+// no local draft to fall back to. See src/core/medconsult.ts.
 //
 // Reusable: Phase 3 calls `probe()` to generate storefront offers; `scripts/bench.ts` is the CLI.
+import { MEDPSY_MODEL } from './medconsult';
 
 export interface ModelBench {
   id: string;
@@ -36,13 +40,12 @@ export interface ProbeOptions {
   log?: (msg: string) => void;
 }
 
-export const DEFAULT_LADDER = [
-  'QWEN3_600M_INST_Q4',
-  'LLAMA_TOOL_CALLING_1B_INST_Q4_K',
-  'QWEN3_1_7B_INST_Q4',
-  'QWEN3_4B_INST_Q4_K_M',
-  // 'QWEN3_8B_INST_Q4_K_M' — opt-in (~5 GB); see scripts/bench.ts BENCH_INCLUDE_8B
-];
+// Fork note (vs upstream Conduit): upstream walked a ladder of general-purpose Qwen3/Llama tiers
+// and sold the largest one that cleared the bar. A health worker's device serves exactly one
+// model — MedPsy-4B — so the "ladder" is a single rung. The prober still earns its keep: it proves
+// this device can actually load and run MedPsy at a usable tok/s before the node advertises a
+// consult offer it can't honour.
+export const DEFAULT_LADDER = [MEDPSY_MODEL];
 
 export async function probe(opts: ProbeOptions = {}): Promise<CapabilityProfile> {
   const log = opts.log ?? (() => {});

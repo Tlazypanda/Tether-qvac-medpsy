@@ -9,6 +9,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeAudit } from '../core/audit';
+import { MEDPSY_MODEL, CONSULT_SYSTEM_PROMPT, CONSULT_PREDICT_TOKENS } from '../core/medconsult';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const sdk: any = await import('@qvac/sdk');
@@ -16,22 +17,19 @@ const sdk: any = await import('@qvac/sdk');
 const audit = makeAudit(path.join(here, '../../AUDIT_LOG.jsonl'));
 const now = () => Number(process.hrtime.bigint() / 1_000n) / 1000; // ms, monotonic
 
-// Each entry: the QVAC model constant, the role it plays in Conduit, and the prompts to run on it.
+// Each entry: the QVAC model constant, the role it plays in the consult flow, and the prompts.
+// Fork note: upstream ran a 0.6B local-draft tier plus a 4B seller tier. This fork has exactly one
+// model — MedPsy-4B on the health worker's device — so the plan is a single entry with real
+// consult prompts, which is what the on-camera audit artifact should show.
 const PLAN: ReadonlyArray<{ model: string; role: string; predict: number; prompts: string[] }> = [
   {
-    model: 'QWEN3_600M_INST_Q4',
-    role: 'local', // the free, on-device router/draft model
-    predict: 256,
+    model: MEDPSY_MODEL,
+    role: 'health-worker', // the model the health worker drafts with, on their own device
+    predict: CONSULT_PREDICT_TOKENS,
     prompts: [
-      'What is the capital of France? Answer in one word.',
-      'What is 17 + 25? Reply with just the number.',
+      'Patient is 34, has had a sore throat for 4 days with a fever of 38.5C, no cough, and painful swollen glands under the jaw. Difficult to swallow solids.',
+      'Patient is 61 with known type 2 diabetes. A small blister on the sole of the right foot has been there 2 weeks, now with surrounding redness and a bad smell. No fever. They say it does not hurt much.',
     ],
-  },
-  {
-    model: 'QWEN3_4B_INST_Q4_K_M',
-    role: 'seller-tier', // the model a paid peer would serve over the channel
-    predict: 384,
-    prompts: ['In two sentences, explain why a stablecoin can lose its 1:1 peg to the dollar.'],
   },
 ];
 
@@ -41,7 +39,10 @@ async function runInference(modelId: unknown, prompt: string, predict: number) {
   const t0 = now();
   const run = sdk.completion({
     modelId,
-    history: [{ role: 'user', content: prompt }],
+    history: [
+      { role: 'system', content: CONSULT_SYSTEM_PROMPT },
+      { role: 'user', content: prompt },
+    ],
     stream: true,
     captureThinking: true,
     kvCache: false,

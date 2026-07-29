@@ -10,6 +10,7 @@ import path from 'node:path';
 import Hyperswarm from 'hyperswarm';
 import { verifyMessage, JsonRpcProvider, HDNodeWallet, type BaseWallet } from 'ethers';
 import { randomSeedHex } from '../core/identity';
+import { MEDPSY_MODEL } from '../core/medconsult';
 
 const TOPIC = crypto.createHash('sha256').update('conduit:market:v1').digest();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -38,17 +39,26 @@ const seller = await getAccount(sellerMnemonic, cfg.rpcUrl, 1); // seller earnin
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const RESOURCES = process.env.CONDUIT_RESOURCES || path.join(here, '../..');
-let offer = { model: 'QWEN3_4B_INST_Q4_K_M', priceBaseUnits: priceFor('QWEN3_4B_INST_Q4_K_M'), tps: 0 };
+let offer = { model: MEDPSY_MODEL, priceBaseUnits: priceFor(MEDPSY_MODEL), tps: 0 };
 try {
   const profile = JSON.parse(readFileSync(path.join(RESOURCES, 'bench-profile.json'), 'utf8'));
-  offer = offerFromProfile(profile) ?? offer;
-  // The seller may override the prober's pick (CONDUIT_SELLER_MODEL) — but ONLY to a model this
+  const probed = offerFromProfile(profile);
+  // Fork guard: this node serves medical consults, so it must only ever advertise the consult
+  // model. A profile left over from upstream Conduit (or from a `BENCH_LADDER` experiment) would
+  // otherwise silently make us offer a general-purpose model on a medical topic — the kind of
+  // thing that must not be discovered mid-shoot. Take the profile's measured tok/s, ignore its pick.
+  if (probed && probed.model === MEDPSY_MODEL) {
+    offer = probed;
+  } else if (probed) {
+    console.log(`[health-worker] ignoring stale bench profile (top model ${probed.model} ≠ ${MEDPSY_MODEL}) — re-run \`npm run bench\``);
+  }
+  // The node may override the prober's pick (CONDUIT_SELLER_MODEL) — but ONLY to a model this
   // machine actually benchmarked as runnable (no "might crash" choices). Price follows the model.
   const chosen = process.env.CONDUIT_SELLER_MODEL;
   if (chosen) {
     const m = profile.models?.find((x: any) => x.id === chosen && x.loaded);
     if (m) offer = { model: chosen, priceBaseUnits: priceFor(chosen), tps: m.tps ?? 0 };
-    else console.log(`[seller] requested model ${chosen} not in this machine's runnable set — keeping ${offer.model}`);
+    else console.log(`[health-worker] requested model ${chosen} not in this machine's runnable set — keeping ${offer.model}`);
   }
 } catch { /* default */ }
 
