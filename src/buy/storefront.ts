@@ -7,12 +7,14 @@
 import crypto from 'node:crypto';
 import Hyperswarm from 'hyperswarm';
 import { Wallet as EthWallet, JsonRpcProvider } from 'ethers';
-import { send, onMessages, bindMessage, type Msg } from '../core/protocol';
+import { send, onMessages, type Msg } from '../core/protocol';
 import { createEscrowClient, type EscrowClient } from '../core/escrow';
 import type { Reputation } from '../core/reputation';
 import type { ConduitAccount } from '../core/wallet';
+import { MEDCONSULT_TOPIC } from '../core/medconsult';
 
-const TOPIC = crypto.createHash('sha256').update('conduit:market:v1').digest();
+// Fork note: our own topic (see src/core/medconsult.ts) — never upstream's `conduit:market:v1`.
+const TOPIC = crypto.createHash('sha256').update(MEDCONSULT_TOPIC).digest();
 
 export interface SellerOffer {
   id: string; // storefront peer key (hex) — stable marketplace id
@@ -39,6 +41,11 @@ export interface PurchaseResult {
   model: string;
   sellerWallet: string;
   stats?: { ttftMs?: number; tps?: number; promptTokens?: number };
+  // ── med-consult (fork) — provenance of the answer, surfaced to the asker's screen ──
+  approvedByHuman?: boolean; // always true for a delivered consult; a draft cannot reach us otherwise
+  edited?: boolean; // the health worker changed the model's wording before sending
+  reviewMs?: number; // how long the human spent reviewing
+  draftMs?: number; // how long MedPsy took to write the draft
 }
 
 export interface SessionInfo {
@@ -54,7 +61,7 @@ export interface Storefront {
   select(id: string): SellerOffer | null; // an offer id, or 'auto'
   selectedId(): string;
   sessions(): SessionInfo[]; // open escrow channels (for the UI session chip)
-  purchase(seller: SellerOffer, prompt: string, opts?: { predict?: number }): Promise<PurchaseResult>;
+  purchase(seller: SellerOffer, prompt: string): Promise<PurchaseResult>;
   close(): Promise<void>;
 }
 
@@ -62,13 +69,14 @@ export interface StorefrontDeps {
   buyer: ConduitAccount; // pays + address
   signerPhrase: string; // BIP-39 phrase for the off-chain bind signature (buyer = account 0)
   consumerPub: string; // QVAC consumer pubkey (the key the seller firewall-allows on grant)
-  sdk: any; // @qvac/sdk (for the delegated loadModel/completion)
   rpcUrl: string; // EVM RPC (for escrow on-chain open/topUp)
   escrow?: { address: string; chainId: number } | null; // deployed ConduitEscrow (enables channel mode)
   depositBaseUnits?: bigint; // per-channel deposit (default 0.05 USD₮)
   sessionDurationSecs?: number; // channel expiry (default 1h)
   reputation?: Reputation; // first-party seller reputation (ranks "Auto", shown in the marketplace)
   log?: (m: string) => void;
+  /** Fired once a consult is with a human — lets the asker's UI say "a health worker is reviewing". */
+  onAwaitingReview?: (requestId: string) => void;
 }
 
 interface SessionState {
@@ -97,7 +105,6 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
   const signer = EthWallet.fromPhrase(deps.signerPhrase);
   const swarm = new Hyperswarm();
   const conns = new Map<string, ConnRec>();
-  const delegated = new Map<string, string>(); // providerPub → delegated modelId (reuse per seller)
   let selected = 'auto';
 
   // Escrow (channel) mode — opt-in, only when a deployment is configured. The buyer's on-chain
@@ -162,6 +169,22 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
       resolvePending(rec, 'sessionGrant', m);
     } else if (m.type === 'drawAck') {
       resolvePending(rec, 'drawAck', m);
+    } else if (m.type === 'consultAck' || m.type === 'consultReady' || m.type === 'consultAnswer') {
+      // Consult replies are keyed by request id: a health worker may have several consults in
+      // flight from the same asker, and a stale reply must not resolve the wrong wait.
+      resolvePending(rec, `${m.type}:${m.requestId}`, m);
+    } else if (m.type === 'consultReject') {
+      const e = new Error(
+        m.stage === 'human'
+          ? 'the health worker reviewed this consult and did not approve it'
+          : 'consult refused: ' + m.reason,
+      );
+      (e as any).stage = m.stage;
+      for (const kind of ['consultAck', 'consultReady', 'consultAnswer']) {
+        const key = `${kind}:${m.requestId}`;
+        const p = rec.pending.get(key);
+        if (p) { rec.pending.delete(key); p.reject(e); }
+      }
     } else if (m.type === 'reject') {
       const e = new Error('seller rejected: ' + m.reason);
       for (const [k, p] of rec.pending) { rec.pending.delete(k); p.reject(e); }
@@ -183,43 +206,24 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
   await swarm.join(TOPIC, { server: false, client: true }).flushed();
   log('[storefront] searching for sellers…');
 
+  // `ms = 0` means wait indefinitely — used only while a human reviews a consult. It is still
+  // bounded in practice: the seller's `consultReject` and the connection's 'close' both reject it.
   function waitFor(rec: ConnRec, kind: string, ms: number): Promise<any> {
     return new Promise((resolve, reject) => {
-      const to = setTimeout(() => { rec.pending.delete(kind); reject(new Error(`timeout waiting for ${kind}`)); }, ms);
+      const to = ms > 0
+        ? setTimeout(() => { rec.pending.delete(kind); reject(new Error(`timeout waiting for ${kind}`)); }, ms)
+        : null;
       rec.pending.set(kind, {
-        resolve: (m: any) => { clearTimeout(to); resolve(m); },
-        reject: (e: Error) => { clearTimeout(to); reject(e); },
+        resolve: (m: any) => { if (to) clearTimeout(to); resolve(m); },
+        reject: (e: Error) => { if (to) clearTimeout(to); reject(e); },
       });
     });
   }
 
-  // Reuse a delegated model handle per provider pubkey, then run the completion.
-  async function delegateAndRun(providerPub: string, model: string, prompt: string, predict?: number) {
-    let modelId = delegated.get(providerPub);
-    if (!modelId) {
-      modelId = await deps.sdk.loadModel({
-        modelSrc: deps.sdk[model],
-        modelType: 'llm',
-        delegate: { providerPublicKey: providerPub, timeout: 60_000, fallbackToLocal: false },
-      });
-      delegated.set(providerPub, modelId!);
-    }
-    const run = deps.sdk.completion({
-      modelId,
-      history: [{ role: 'user', content: prompt }],
-      stream: true,
-      captureThinking: true,
-      kvCache: false,
-      generationParams: { predict: predict ?? 1024, reasoning_budget: 0 },
-    });
-    let answer = '';
-    for await (const ev of run.events) { if (ev.type === 'contentDelta') answer += ev.text; }
-    const final = await run.final.catch(() => null);
-    return {
-      answer: answer.trim(),
-      stats: { ttftMs: final?.stats?.timeToFirstToken, tps: final?.stats?.tokensPerSecond, promptTokens: final?.stats?.promptTokens },
-    };
-  }
+  // Fork note: upstream had a `delegateAndRun()` here — it loaded a model handle bound to the
+  // seller's provider pubkey and streamed tokens straight to the buyer. That is precisely the path
+  // a human cannot step into (see the consult section of src/core/protocol.ts), so it is gone. The
+  // asker's device now runs no model at all; it sends a question and receives approved text.
 
   // Open (or resume) an escrow channel to this seller and get the granted provider pubkey.
   async function ensureSession(rec: ConnRec, offer: SellerOffer): Promise<SessionState> {
@@ -272,55 +276,66 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
     }
   }
 
-  async function runPurchase(seller: SellerOffer, prompt: string, opts?: { predict?: number }): Promise<PurchaseResult> {
+  async function runPurchase(seller: SellerOffer, prompt: string): Promise<PurchaseResult> {
     const rec = conns.get(seller.id);
     if (!rec || !rec.offer?.online) throw new Error('seller offline');
     const conn = rec.conn;
     const price = seller.priceBaseUnits;
 
-    // ── ESCROW CHANNEL PATH ── (when both sides support it): open once, then instant vouchers.
-    if (esc && escrowWallet && seller.escrow) {
-      const sess = await ensureSession(rec, seller);
-      if (sess.cumulative + price > sess.deposit) {
-        // Channel nearly drained — top it up on-chain so a long session/demo never stalls mid-answer.
-        log(`[storefront] channel low — auto top-up ${deposit} → ${seller.sellerWallet.slice(0, 10)}…`);
-        await esc.topUp(escrowWallet, seller.token, seller.sellerWallet, deposit);
-        const ch = await esc.channel(escrowWallet.address, seller.sellerWallet);
-        sess.deposit = ch.deposit;
-      }
-      sess.cumulative += price; // running total owed
-      const sig = await esc.signVoucher(escrowWallet, seller.sellerWallet, sess.epoch, sess.cumulative);
-      send(conn, { type: 'draw', buyerWallet: escrowWallet.address, cumulative: sess.cumulative.toString(), signature: sig });
-      await waitFor(rec, 'drawAck', 20_000); // seller verified + recorded the voucher (instant)
-      const out = await delegateAndRun(sess.providerPub, seller.model, prompt, opts?.predict);
-      return { ...out, cost: price, via: 'channel', model: seller.model, sellerWallet: seller.sellerWallet };
+    // ── MED-CONSULT PATH ── A consult always settles through an escrow channel: the channel is the
+    // one step that genuinely needs the internet, and the demo opens it deliberately BEFORE going
+    // into airplane mode. Upstream's per-inference on-chain path would need connectivity at the
+    // moment of asking, which is exactly what this fork claims not to need — so it is refused
+    // rather than silently used.
+    if (!esc || !escrowWallet) throw new Error('escrow not configured — a consult settles over a payment channel (set CONDUIT_ESCROW=1)');
+    if (!seller.escrow) throw new Error('this health worker does not accept payment channels');
+
+    const sess = await ensureSession(rec, seller);
+    if (sess.cumulative + price > sess.deposit) {
+      // Channel nearly drained — top it up on-chain so a long session/demo never stalls mid-consult.
+      // NOTE: this touches the chain, so it needs connectivity. Fund generously before filming.
+      log(`[storefront] channel low — auto top-up ${deposit} → ${seller.sellerWallet.slice(0, 10)}…`);
+      await esc.topUp(escrowWallet, seller.token, seller.sellerWallet, deposit);
+      const ch = await esc.channel(escrowWallet.address, seller.sellerWallet);
+      sess.deposit = ch.deposit;
     }
 
-    // ── PER-INFERENCE PATH ── (default): one on-chain payment per escalation.
-    // 1) request a quote (the seller mints a single-use nonce)
-    send(conn, { type: 'quoteReq', buyerConsumerPub: deps.consumerPub, buyerWallet: deps.buyer.address });
-    const quote = await waitFor(rec, 'quote', 20_000);
+    const requestId = crypto.randomBytes(16).toString('hex');
 
-    // 2) sign the identity bind + pay USD₮ to the seller's advertised wallet
-    const signature = await signer.signMessage(bindMessage(quote.nonce, deps.consumerPub, deps.buyer.address));
-    const qprice = BigInt(quote.price);
-    log(`[storefront] paying ${quote.price} to ${String(quote.sellerWallet).slice(0, 10)}…`);
-    const tx = await deps.buyer.transferToken(quote.token, quote.sellerWallet, qprice);
-    send(conn, {
-      type: 'receipt',
-      nonce: quote.nonce,
-      txHash: tx?.hash ?? '',
-      buyerConsumerPub: deps.consumerPub,
-      buyerWallet: deps.buyer.address,
-      signature,
-    });
+    // 1) Send the question. The health worker's device drafts it locally with MedPsy.
+    send(conn, { type: 'consultReq', requestId, buyerWallet: escrowWallet.address, question: prompt });
+    await waitFor(rec, `consultAck:${requestId}`, 30_000); // gate passed, drafting started
+    log(`[storefront] consult ${requestId.slice(0, 8)}… accepted — health worker is drafting, then reviewing`);
+    deps.onAwaitingReview?.(requestId);
 
-    // 3) the seller confirms the payment on-chain (~10–15s) then grants the gated provider pubkey
-    const grant = await waitFor(rec, 'grant', 120_000);
+    // 2) Wait for a HUMAN. There is deliberately no timeout on human judgement — a health worker
+    //    mid-consultation may take minutes, and timing them out would be the wrong failure mode.
+    //    A rejected draft rejects this promise via `consultReject` (stage: 'human'); a dropped
+    //    connection rejects it via the conn 'close' handler. Neither can hang forever.
+    const ready = await waitFor(rec, `consultReady:${requestId}`, 0);
+    log('[storefront] health worker approved — settling the voucher');
 
-    // 4) delegate the seller's model over E2E
-    const out = await delegateAndRun(grant.providerPub, seller.model, prompt, opts?.predict);
-    return { ...out, cost: qprice, txHash: tx?.hash, via: 'per-inference', model: seller.model, sellerWallet: quote.sellerWallet };
+    // 3) Pay. The answer text has NOT crossed the wire yet — payment is still the access handshake.
+    sess.cumulative += price; // running total owed
+    const sig = await esc.signVoucher(escrowWallet, seller.sellerWallet, sess.epoch, sess.cumulative);
+    send(conn, { type: 'draw', buyerWallet: escrowWallet.address, cumulative: sess.cumulative.toString(), signature: sig });
+    await waitFor(rec, 'drawAck', 20_000); // health worker verified + recorded the voucher (instant)
+    void ready;
+
+    // 4) Voucher verified → the approved answer is released.
+    const ans = await waitFor(rec, `consultAnswer:${requestId}`, 30_000);
+    return {
+      answer: String(ans.answer ?? '').trim(),
+      cost: price,
+      via: 'channel',
+      model: seller.model,
+      sellerWallet: seller.sellerWallet,
+      stats: ans.stats,
+      approvedByHuman: ans.approvedByHuman === true,
+      edited: ans.edited === true,
+      reviewMs: Number(ans.reviewMs ?? 0),
+      draftMs: Number(ans.draftMs ?? 0),
+    };
   }
 
   return {
@@ -343,11 +358,11 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
         remaining: (s.deposit - s.cumulative).toString(),
       }));
     },
-    async purchase(seller, prompt, opts) {
+    async purchase(seller, prompt) {
       // Record the outcome against the seller's reputation (served on success, failed on any error)
       // and refresh the offer's displayed counts so the marketplace updates live.
       try {
-        const res = await runPurchase(seller, prompt, opts);
+        const res = await runPurchase(seller, prompt);
         deps.reputation?.recordServed(seller.sellerWallet, res.stats?.tps ?? null);
         refreshOfferRep(seller.sellerWallet);
         return res;

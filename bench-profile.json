@@ -1,11 +1,19 @@
 {
-  "_comment": "Placeholder — run `npm run bench` on THIS device to populate it. Upstream Conduit committed a profile measured on the author's Linux/RTX-4050 box; those numbers are not yours and are not for a medical model. A node with an unpopulated profile still serves MedPsy-4B, it just advertises 0 tok/s until benchmarked.",
-  "ts": null,
-  "platform": null,
-  "arch": null,
-  "backend": "unknown",
+  "ts": "2026-07-29T17:59:17.001Z",
+  "platform": "darwin",
+  "arch": "arm64",
+  "backend": "gpu",
   "minSellTps": 10,
-  "models": [],
-  "topSellable": null,
-  "localDraft": null
+  "models": [
+    {
+      "id": "HEALTHCARE_4B_MEDICAL_Q4_K_M",
+      "loaded": true,
+      "loadMs": 322085,
+      "backend": "gpu",
+      "ttftMs": 6105.704,
+      "tps": 25.671545721336
+    }
+  ],
+  "topSellable": "HEALTHCARE_4B_MEDICAL_Q4_K_M",
+  "localDraft": "HEALTHCARE_4B_MEDICAL_Q4_K_M"
 }

@@ -1,9 +1,10 @@
-// Conduit local web app — the consumer (buyer) face. A tiny Node server wraps the proven engine
-// (confidence router + spend policy) and the live P2P storefront, and serves a chat + wallet UI.
+// The ASKER's app — a tiny Node server wrapping the spend policy and the live P2P storefront,
+// serving the chat + wallet UI. This device holds no medical model: every consult goes to a paid
+// health-worker peer, is drafted on THEIR device, and is reviewed by a human before it comes back.
 //
 // The wallet is a per-user encrypted keystore (src/core/keystore.ts): the app is LOCKED until the
-// user creates/imports + unlocks it; the buyer account + storefront are built on unlock. The local
-// router warms independently (free answers need no wallet). A `.env` mnemonic auto-unlocks in dev.
+// user creates/imports + unlocks it; the asker account + storefront are built on unlock.
+// A `.env` mnemonic auto-unlocks in dev.
 // Run: npm run web
 import http from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
@@ -11,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { formatUnits } from 'ethers';
 import { randomSeedHex, publicKeyHexFromSeed } from '../core/identity';
+import { MEDICAL_DISCLAIMER } from '../core/medconsult';
 
 const PORT = Number(process.env.PORT || 8788);
 const buyerSeed = process.env.QVAC_HYPERSWARM_SEED || randomSeedHex();
@@ -20,7 +22,6 @@ process.env.QVAC_HYPERSWARM_SEED = buyerSeed; // this process = buyer (set befor
 const { loadConfig } = await import('../core/config');
 const { getAccount } = await import('../core/wallet');
 const { SpendPolicy } = await import('../buy/policy');
-const { createRouter } = await import('../buy/router');
 const { createStorefront } = await import('../buy/storefront');
 const { createMarketAgent } = await import('../buy/market-agent');
 const { loadEscrowDeployment } = await import('../core/escrow');
@@ -116,37 +117,20 @@ let storefront: any = null;
 let agent: any = null;
 let setupErr: string | undefined;
 
-// First-run model download/warm progress, surfaced to the UI (a multi-GB local model otherwise
-// looks like a silent hang). Pushed live over SSE (/api/model/progress) + snapshotted in /api/state.
+// Fork note: upstream warmed a local 0.6B router here and streamed its multi-GB download progress
+// to the UI. The asker's device deliberately carries NO model — that is the premise of the demo —
+// so there is nothing to download and nothing to warm. The endpoint and the field are kept so the
+// React app's existing wiring keeps working; they simply report "ready" from the start.
 type ModelProgress = { phase: 'warming' | 'downloading' | 'ready' | 'error'; model?: string; percentage?: number; message?: string };
-let modelProgress: ModelProgress = { phase: 'warming' };
+const modelProgress: ModelProgress = { phase: 'ready', message: 'no on-device model — consults are answered by a health worker peer' };
 const progressClients = new Set<http.ServerResponse>();
-function setProgress(p: ModelProgress) {
-  modelProgress = p;
-  const line = `data: ${JSON.stringify(p)}\n\n`;
-  for (const c of progressClients) { try { c.write(line); } catch { /* client gone */ } }
-}
-
-// The local router warms independently of the wallet (free, on-device answers need no key).
-let router: any = null;
-let routerReady = false;
-const routerPromise = (async () => {
-  try {
-    router = await createRouter({ k: 5, verify: process.env.CONDUIT_VERIFY === '1', onProgress: (pr) => setProgress({ phase: 'downloading', model: pr.model, percentage: pr.percentage }) });
-    routerReady = true;
-    setProgress({ phase: 'ready' });
-  } catch (e: any) {
-    setupErr = String(e?.message ?? e);
-    setProgress({ phase: 'error', message: setupErr });
-  }
-})();
 
 async function unlockWith(mnemonic: string): Promise<string> {
   const acct = await getAccount(mnemonic, cfg.rpcUrl, 0); // buyer = account 0 of this wallet
-  const sf = await createStorefront({ buyer: acct, signerPhrase: mnemonic, consumerPub: buyerPub, sdk, rpcUrl: cfg.rpcUrl, escrow: escrowDep, reputation, log: (m) => console.log(m) });
+  const sf = await createStorefront({ buyer: acct, signerPhrase: mnemonic, consumerPub: buyerPub, rpcUrl: cfg.rpcUrl, escrow: escrowDep, reputation, log: (m) => console.log(m) });
   buyer = acct;
   storefront = sf;
-  agent = null; // (re)created lazily once the router is warm
+  agent = null; // (re)created lazily once the storefront exists
   wallet = { mnemonic, address: acct.address };
   return acct.address;
 }
@@ -158,7 +142,8 @@ function lock(): void {
 }
 
 function getAgent(): any {
-  if (!agent && routerReady && storefront) agent = createMarketAgent({ router, policy, storefront });
+  // Fork note: upstream gated this on the local router being warm. The asker has no model to warm.
+  if (!agent && storefront) agent = createMarketAgent({ policy, storefront, log: (m) => console.log(m) });
   return agent;
 }
 
@@ -305,7 +290,7 @@ const server = http.createServer((req, res) => {
           spent: formatUnits(BigInt(s.cumulative), DEC),
           remaining: formatUnits(BigInt(s.remaining), DEC),
         })),
-        ready: routerReady && !setupErr,
+        ready: !setupErr,
         setupErr: setupErr ?? null,
         modelProgress,
       });
@@ -353,15 +338,21 @@ const server = http.createServer((req, res) => {
       const { prompt } = await readBody(req);
       if (!prompt || !String(prompt).trim()) { json(res, 400, { error: 'empty prompt' }); return; }
       if (!wallet) { json(res, 401, { error: 'wallet locked' }); return; }
-      await routerPromise;
       const a = getAgent();
       if (!a) { json(res, 503, { error: setupErr ?? 'engine still warming up' }); return; }
       try {
         const r = await a.ask(String(prompt));
         json(res, 200, {
-
           source: r.source, reason: r.reason ?? null, answer: r.answer, note: r.note ?? null,
-          consistency: Number(r.consistency.toFixed(3)), cost: formatUnits(r.cost, DEC),
+          cost: formatUnits(r.cost, DEC),
+          model: r.model ?? null,
+          healthWorker: r.healthWorker ?? null,
+          // Provenance the asker's screen shows: a person approved this, and how long they took.
+          approvedByHuman: r.approvedByHuman ?? false,
+          edited: r.edited ?? false,
+          reviewMs: r.reviewMs ?? null,
+          draftMs: r.draftMs ?? null,
+          disclaimer: MEDICAL_DISCLAIMER,
           stats: { ttftMs: r.stats?.ttftMs ?? null, tps: r.stats?.tps ?? null },
         });
       } catch (e: any) { json(res, 500, { error: String(e?.message ?? e) }); }
