@@ -10,9 +10,13 @@ import path from 'node:path';
 import Hyperswarm from 'hyperswarm';
 import { verifyMessage, JsonRpcProvider, HDNodeWallet, type BaseWallet } from 'ethers';
 import { randomSeedHex } from '../core/identity';
-import { MEDPSY_MODEL } from '../core/medconsult';
+import { MEDPSY_MODEL, MEDCONSULT_TOPIC } from '../core/medconsult';
+import type { Consult } from '../sell/consult';
 
-const TOPIC = crypto.createHash('sha256').update('conduit:market:v1').digest();
+// Fork note: a distinct topic from upstream's `conduit:market:v1`, so this node never meets a real
+// Conduit buyer (which would speak the delegation protocol, not the consult protocol) and our
+// testing never shows up as noise on the live Conduit marketplace.
+const TOPIC = crypto.createHash('sha256').update(MEDCONSULT_TOPIC).digest();
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // This process's QVAC provider identity — set before the SDK touches the swarm.
@@ -24,6 +28,9 @@ const { getAccount } = await import('../core/wallet');
 const { offerFromProfile, priceFor } = await import('../core/pricing');
 const { send, onMessages, bindMessage } = await import('../core/protocol');
 const { createEscrowClient, loadEscrowDeployment } = await import('../core/escrow');
+const { createConsultQueue } = await import('../sell/consult');
+const { startApprovalServer } = await import('../sell/approval-server');
+const { makeAudit } = await import('../core/audit');
 const sdk: any = await import('@qvac/sdk');
 
 const cfg = loadConfig();
@@ -111,6 +118,128 @@ async function balanceOrNull(): Promise<bigint | null> {
   catch (e: any) { console.log('[seller] rpc error reading balance:', e?.message ?? e); return null; }
 }
 
+// ── med-consult: local drafting + the human-approval gate ───────────────────────────────────────
+// The consult queue owns the MedPsy handle and parks each draft on `awaiting_review` until a human
+// decides. The approval server is the health worker's screen (upstream's provider role is headless).
+const audit = makeAudit(process.env.CONDUIT_AUDIT_LOG || 'AUDIT_LOG.jsonl');
+let connectedPeers = 0;
+
+const queue = createConsultQueue({
+  sdk,
+  model: offer.model,
+  log: (m) => console.log(m),
+  onChange: (c) => { ui?.broadcast(); if (c.stage === 'awaiting_review') console.log('[health-worker] AWAITING HUMAN REVIEW — open ' + (ui?.url ?? 'the approval screen')); },
+  onDraftDelta: () => scheduleUiPush(), // stream tokens to the screen, throttled
+});
+
+let ui: Awaited<ReturnType<typeof startApprovalServer>> | null = null;
+
+// Draft tokens arrive faster than a screen needs repainting; coalesce to ~10 fps so a 4B
+// generation doesn't spend its time serialising JSON snapshots.
+let uiPushTimer: NodeJS.Timeout | null = null;
+function scheduleUiPush() {
+  if (uiPushTimer) return;
+  uiPushTimer = setTimeout(() => { uiPushTimer = null; ui?.broadcast(); }, 100);
+}
+
+// Consults a human approved that are waiting on the asker's payment voucher before the text is
+// released. Keyed by asker wallet (lower) → FIFO, since one `draw` settles exactly one consult.
+const awaitingPayment = new Map<string, Array<{ conn: any; consult: Consult }>>();
+
+function queueForPayment(wallet: string, entry: { conn: any; consult: Consult }) {
+  const k = wallet.toLowerCase();
+  const arr = awaitingPayment.get(k) ?? [];
+  arr.push(entry);
+  awaitingPayment.set(k, arr);
+}
+
+/** Called after a voucher verifies: release the oldest paid-for consult to that asker. */
+function deliverPaidConsult(wallet: string) {
+  const k = wallet.toLowerCase();
+  const arr = awaitingPayment.get(k);
+  if (!arr || !arr.length) return;
+  const { conn, consult: c } = arr.shift()!;
+  if (!arr.length) awaitingPayment.delete(k);
+  send(conn, {
+    type: 'consultAnswer',
+    requestId: c.id,
+    answer: c.finalAnswer,
+    approvedByHuman: true,
+    edited: c.edited,
+    reviewMs: c.reviewMs,
+    draftMs: c.draftMs,
+    model: offer.model,
+    stats: c.stats,
+  });
+  console.log(`[health-worker] answer delivered for ${c.id.slice(0, 8)}… (paid, human-approved)`);
+  // The evidence line: a human approved this, how long they looked at it, and that it ran here.
+  audit.log('consult', {
+    request_id: c.id,
+    model: offer.model,
+    role: 'health-worker',
+    approved_by_human: true,
+    edited_by_human: c.edited,
+    review_ms: c.reviewMs,
+    draft_ms: c.draftMs,
+    ttft_ms: c.stats.ttftMs ?? null,
+    tps: c.stats.tps ?? null,
+    prompt_tokens: c.stats.promptTokens ?? null,
+    completion_tokens: c.stats.completionTokens ?? null,
+    backend: c.stats.backend ?? null,
+    price_base_units: offer.priceBaseUnits.toString(),
+    asker_wallet: c.askerWallet,
+    cloud_bytes: 0,
+  });
+}
+
+async function handleConsult(conn: any, m: { requestId: string; buyerWallet: string; question: string }) {
+  // ── The payment gate ── Upstream refuses a freeloader at the Noise handshake (0 bytes served).
+  // Our equivalent, one layer up: without a verified on-chain channel this device does not draft,
+  // so a non-paying peer costs the health worker zero GPU cycles and zero battery — and of course
+  // receives zero answer bytes.
+  const s = sessions.get(m.buyerWallet.toLowerCase());
+  if (!s) {
+    send(conn, { type: 'consultReject', requestId: m.requestId, reason: 'no open payment channel — open one first', stage: 'gate' });
+    console.log('[health-worker] REJECTED consult (no payment channel) — 0 bytes, 0 GPU cycles');
+    audit.log('p2p', { sub: 'consult_refused_unpaid', asker_wallet: m.buyerWallet, bytes_served: 0 });
+    return;
+  }
+  if (s.cumulative + offer.priceBaseUnits > s.deposit) {
+    send(conn, { type: 'consultReject', requestId: m.requestId, reason: 'payment channel exhausted — top up', stage: 'gate' });
+    return;
+  }
+  const question = String(m.question ?? '').trim();
+  if (!question) {
+    send(conn, { type: 'consultReject', requestId: m.requestId, reason: 'empty consult', stage: 'gate' });
+    return;
+  }
+
+  console.log(`[health-worker] consult ${m.requestId.slice(0, 8)}… received → drafting locally with ${offer.model}`);
+  queue.submit(m.requestId, question, m.buyerWallet);
+  send(conn, { type: 'consultAck', requestId: m.requestId, stage: 'drafting' });
+
+  // Park here for as long as the human needs. There is no timeout on human judgement.
+  const decided = await queue.waitForDecision(m.requestId);
+
+  if (decided.stage === 'rejected') {
+    send(conn, { type: 'consultReject', requestId: m.requestId, reason: 'the health worker did not approve this draft', stage: 'human' });
+    audit.log('consult', {
+      request_id: decided.id, model: offer.model, role: 'health-worker',
+      approved_by_human: false, outcome: 'rejected_by_human',
+      review_ms: decided.reviewMs, draft_ms: decided.draftMs, cloud_bytes: 0,
+    });
+    return;
+  }
+  if (decided.stage !== 'approved') {
+    send(conn, { type: 'consultReject', requestId: m.requestId, reason: decided.error ?? 'drafting failed', stage: 'error' });
+    return;
+  }
+
+  // Approved. Announce readiness WITHOUT the text, take payment, then deliver (see protocol.ts).
+  queueForPayment(m.buyerWallet, { conn, consult: decided });
+  send(conn, { type: 'consultReady', requestId: m.requestId, priceBaseUnits: String(offer.priceBaseUnits) });
+}
+
 async function ensureProvider(buyerPub: string): Promise<string> {
   if (!providerPub) {
     const res = await sdk.startQVACProvider({ firewall: { mode: 'allow', publicKeys: [buyerPub] } });
@@ -137,7 +266,10 @@ async function verifyReceipt(m: any): Promise<{ ok: boolean; reason?: string }> 
 
 const swarm = new Hyperswarm();
 swarm.on('connection', (conn: any) => {
-  console.log('[seller] buyer connected on storefront');
+  console.log('[health-worker] asker connected');
+  connectedPeers++;
+  ui?.broadcast();
+  conn.on('close', () => { connectedPeers = Math.max(0, connectedPeers - 1); ui?.broadcast(); });
   send(conn, { type: 'offer', sellerWallet: seller.address, model: offer.model, priceBaseUnits: String(offer.priceBaseUnits), tps: offer.tps, token: cfg.usdtAddress, chainId: cfg.chainId, ...(escrowDep ? { escrow: escrowDep.address } : {}) });
   onMessages(conn, async (m) => {
     if (m.type === 'quoteReq') {
@@ -185,15 +317,38 @@ swarm.on('connection', (conn: any) => {
       send(conn, { type: 'drawAck', cumulative: cumulative.toString() });
       console.log(`[seller] draw ${cumulative} verified → GRANTED (served)`);
       emitPending(); // a voucher just landed — surface the earned delta even before it's claimed
+      // The voucher is good — now, and only now, the approved answer text crosses the wire.
+      deliverPaidConsult(m.buyerWallet);
       maybeClaim(m.buyerWallet);
+    } else if (m.type === 'consultReq') {
+      await handleConsult(conn, m);
     }
   });
 });
 
+// The approval screen comes up BEFORE the node announces itself, so a consult can never arrive
+// with nowhere for a human to review it.
+ui = await startApprovalServer({
+  queue,
+  model: offer.model,
+  peersConnected: () => connectedPeers,
+  log: (m) => console.log(m),
+});
+
 await swarm.join(TOPIC, { server: true, client: false }).flushed();
 console.log(`[seller] online. offer: ${offer.model} @ ${offer.priceBaseUnits} base-units, ~${offer.tps} tps. wallet ${seller.address}`);
+console.log(`[health-worker] review consults at ${ui.url} — nothing is sent to an asker without your approval`);
 
-async function shutdown() { try { await sdk.stopQVACProvider(); } catch {} try { await sdk.close(); } catch {} try { await swarm.destroy(); } catch {} process.exit(0); }
+// Warm MedPsy now (a few seconds from cache, minutes on first download) so the first consult of
+// the session isn't also the slowest. Failure here is fatal: a health worker node that cannot draft
+// has nothing to offer, and silently accepting consults it can't answer would be worse.
+queue.warm().catch((e: any) => {
+  console.error('[health-worker] FATAL: could not load ' + offer.model + ':', e?.message ?? e);
+  console.error('[health-worker] run `npm run bench` to download/verify the model, then restart.');
+  void shutdown();
+});
+
+async function shutdown() { try { await ui?.close(); } catch {} try { await queue.close(); } catch {} try { await sdk.stopQVACProvider(); } catch {} try { await sdk.close(); } catch {} try { await swarm.destroy(); } catch {} process.exit(0); }
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
 
