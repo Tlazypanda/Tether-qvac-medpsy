@@ -11,6 +11,7 @@ import Hyperswarm from 'hyperswarm';
 import { verifyMessage, JsonRpcProvider, HDNodeWallet, type BaseWallet } from 'ethers';
 import { randomSeedHex } from '../core/identity';
 import { MEDPSY_MODEL, MEDCONSULT_TOPIC } from '../core/medconsult';
+import { swarmOptions, discoveryMode } from '../core/swarm';
 import type { Consult } from '../sell/consult';
 
 // Fork note: a distinct topic from upstream's `conduit:market:v1`, so this node never meets a real
@@ -264,7 +265,7 @@ async function verifyReceipt(m: any): Promise<{ ok: boolean; reason?: string }> 
   return { ok: true };
 }
 
-const swarm = new Hyperswarm();
+const swarm = new Hyperswarm(swarmOptions());
 swarm.on('connection', (conn: any) => {
   console.log('[health-worker] asker connected');
   connectedPeers++;
@@ -331,12 +332,14 @@ swarm.on('connection', (conn: any) => {
 ui = await startApprovalServer({
   queue,
   model: offer.model,
+  chainId: cfg.chainId,
   peersConnected: () => connectedPeers,
   log: (m) => console.log(m),
 });
 
 await swarm.join(TOPIC, { server: true, client: false }).flushed();
 console.log(`[seller] online. offer: ${offer.model} @ ${offer.priceBaseUnits} base-units, ~${offer.tps} tps. wallet ${seller.address}`);
+console.log(`[health-worker] discovery: ${discoveryMode()}`);
 console.log(`[health-worker] review consults at ${ui.url} — nothing is sent to an asker without your approval`);
 
 // Warm MedPsy now (a few seconds from cache, minutes on first download) so the first consult of

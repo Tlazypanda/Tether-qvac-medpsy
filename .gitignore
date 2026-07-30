@@ -18,6 +18,10 @@ CONDUIT-PLAN.md
 # live audit logs (keep AUDIT_LOG.sample.jsonl as a committed example)
 AUDIT_LOG.jsonl
 audit-*.jsonl
+# per-role logs written by `npm run ask` / `npm run sell` (named explicitly so the committed
+# *-sample.jsonl artifacts we screenshot for the video are never swept up by a wildcard)
+AUDIT_LOG.asker.jsonl
+AUDIT_LOG.health-worker.jsonl
 
 # QVAC / model caches
 .qvac/

@@ -12,6 +12,7 @@ import { createEscrowClient, type EscrowClient } from '../core/escrow';
 import type { Reputation } from '../core/reputation';
 import type { ConduitAccount } from '../core/wallet';
 import { MEDCONSULT_TOPIC } from '../core/medconsult';
+import { swarmOptions } from '../core/swarm';
 
 // Fork note: our own topic (see src/core/medconsult.ts) — never upstream's `conduit:market:v1`.
 const TOPIC = crypto.createHash('sha256').update(MEDCONSULT_TOPIC).digest();
@@ -103,7 +104,7 @@ function byPriceThenSpeed(a: SellerOffer, b: SellerOffer): number {
 export async function createStorefront(deps: StorefrontDeps): Promise<Storefront> {
   const log = deps.log ?? (() => {});
   const signer = EthWallet.fromPhrase(deps.signerPhrase);
-  const swarm = new Hyperswarm();
+  const swarm = new Hyperswarm(swarmOptions());
   const conns = new Map<string, ConnRec>();
   let selected = 'auto';
 

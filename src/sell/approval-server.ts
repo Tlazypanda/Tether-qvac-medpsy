@@ -16,6 +16,8 @@ import { MEDPSY_LABEL } from '../core/medconsult';
 export interface ApprovalServerDeps {
   queue: ConsultQueue;
   model: string;
+  /** Chain the seller is settling on — the page names it rather than assuming Sepolia. */
+  chainId: number;
   port?: number;
   host?: string;
   /** How many asker peers are currently connected — shown as a link indicator on the screen. */
@@ -95,7 +97,7 @@ export async function startApprovalServer(deps: ApprovalServerDeps): Promise<App
     void (async () => {
       if (req.method === 'GET' && (p === '/' || p === '/index.html')) {
         res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
-        res.end(approvalPage());
+        res.end(approvalPage(deps.chainId));
         return;
       }
       if (req.method === 'GET' && p === '/api/state') { json(res, 200, snapshot()); return; }

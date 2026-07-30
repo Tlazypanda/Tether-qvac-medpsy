@@ -10,7 +10,8 @@
 //
 // Run:  CONSULT="my symptoms…" npm run ask
 import { randomSeedHex, publicKeyHexFromSeed } from '../core/identity';
-import { MEDCONSULT_TOPIC, MEDICAL_DISCLAIMER, TESTNET_NOTICE } from '../core/medconsult';
+import { MEDCONSULT_TOPIC, MEDICAL_DISCLAIMER, testnetNotice } from '../core/medconsult';
+import { discoveryMode } from '../core/swarm';
 
 void MEDCONSULT_TOPIC; // the topic itself is joined inside the storefront
 
@@ -53,9 +54,10 @@ const policy = new SpendPolicy(
 );
 
 console.log('=== med-consult — ASKER ===');
-console.log(TESTNET_NOTICE);
+console.log(testnetNotice(cfg.chainId)); // names the chain we are actually on, not a hardcoded one
 console.log(`wallet ${asker.address}`);
-console.log('this device carries no medical model — the consult is answered by a health worker peer\n');
+console.log('this device carries no medical model — the consult is answered by a health worker peer');
+console.log(`discovery: ${discoveryMode()}\n`);
 
 const storefront = await createStorefront({
   buyer: asker,

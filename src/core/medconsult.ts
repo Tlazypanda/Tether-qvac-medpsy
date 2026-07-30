@@ -39,6 +39,27 @@ export const MEDICAL_DISCLAIMER_SHORT = 'AI-assisted · human-reviewed · not em
 /** Testnet framing, carried over from upstream Conduit — no real money, ever. */
 export const TESTNET_NOTICE = 'Testnet demonstration only — test USD₮ on Sepolia, no real funds.';
 
+/** Chain ids this fork is ever expected to run against. Anything else is a mistake worth shouting about. */
+const CHAIN_NAMES: Record<number, string> = {
+  11155111: 'Sepolia',
+  31337: 'a local Hardhat chain',
+};
+
+/**
+ * Chain-aware testnet notice.
+ *
+ * Why this is not just a constant: the flat string above says "on Sepolia", but the demo is often
+ * run against a throwaway local Hardhat chain (see contracts/scripts/deploy-local.ts). Reading
+ * "Sepolia" off a screen that is actually talking to chain 31337 would be a false claim on camera,
+ * which is exactly what this demo cannot afford. Pass the chain id you are really connected to.
+ */
+export function testnetNotice(chainId: number): string {
+  const name = CHAIN_NAMES[chainId];
+  if (name) return `Testnet demonstration only — test USD₮ on ${name}, no real funds.`;
+  // Unknown chain: name the number rather than guess, and do not imply it is a testnet.
+  return `Demonstration only — test USD₮ on chain ${chainId}. Never point this at mainnet.`;
+}
+
 /**
  * System prompt for the draft. Asks for the two things the health worker actually reviews —
  * a severity read and a management plan — and explicitly tells the model a human will check it.

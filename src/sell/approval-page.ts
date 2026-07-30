@@ -5,9 +5,11 @@
 // the CLI on a laptop should be able to open a URL and review consults without first building a
 // React app. It is also the screen that has to read clearly on camera, hence the large type and
 // the unmissable review banner.
-import { MEDICAL_DISCLAIMER, MEDPSY_LABEL, TESTNET_NOTICE } from '../core/medconsult';
+import { MEDICAL_DISCLAIMER, MEDPSY_LABEL, testnetNotice } from '../core/medconsult';
 
-export function approvalPage(): string {
+/** `chainId` names the chain in the footer — the screen must not claim Sepolia while on a local chain. */
+export function approvalPage(chainId: number): string {
+  const notice = testnetNotice(chainId);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -153,7 +155,7 @@ export function approvalPage(): string {
   </section>
 </main>
 
-<footer>${TESTNET_NOTICE} &nbsp;·&nbsp; Nothing is sent to the asker until you tap <b>Approve &amp; Send</b>.</footer>
+<footer>${notice} &nbsp;·&nbsp; Nothing is sent to the asker until you tap <b>Approve &amp; Send</b>.</footer>
 
 <script>
 (function () {
