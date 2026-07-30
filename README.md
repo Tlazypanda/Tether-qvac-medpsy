@@ -49,6 +49,7 @@ nothing**. Every model runs fully on-device through the **QVAC runtime**.
 
 ## Contents
 
+- [**Running it, step by step** (`docs/RUNNING.md`)](./docs/RUNNING.md) — desktop + mobile, with troubleshooting
 - [What changed vs upstream Conduit](#what-changed-vs-upstream-conduit)
 - [How it works](#how-it-works)
 - [Demo hardware](#demo-hardware)
@@ -149,36 +150,55 @@ asker/health worker is a runtime flag.
 
 ## Prerequisites
 
-- **Node.js ≥ 22**
-- A **GPU**: NVIDIA + Vulkan (Linux/Windows) or Apple Silicon + Metal (macOS) for the seller role
-- **~10 GB free disk** for the on-device model cache (`~/.qvac`)
-- A funded **testnet** wallet: a little **Sepolia ETH** (gas) + **test USD₮** (see [faucets](#getting-testnet-funds))
+The two roles do **not** need the same machine:
+
+| | Asker device | Health worker device |
+|---|---|---|
+| GPU | not needed | **required** — NVIDIA+Vulkan or Apple Silicon+Metal |
+| Free disk | ~1 GB | **~10 GB** for the model cache (`~/.qvac`) |
+| Model | **none, by design** | MedPsy-4B, ~2.7 GB, downloaded once |
+
+- **Node.js ≥ 22** (prefer 22 LTS — Hardhat warns on 23, harmlessly but noisily)
+- A **testnet** wallet, or the local Hardhat chain, which needs no faucet at all
+- **A real LAN** for the two-device demo — see the networking note under [Demo hardware](#demo-hardware)
 - `git`
 
 ---
 
 ## Setup (clean checkout)
 
+> **📖 Step-by-step guide: [`docs/RUNNING.md`](./docs/RUNNING.md)** — desktop and mobile from zero,
+> with a troubleshooting section for the failures that actually happen. Start there if anything below
+> doesn't work first time.
+
 ```bash
 # 1. Clone + install engine dependencies
-git clone https://github.com/Conduit-Organization/conduit.git
-cd conduit
+git clone <your fork url> qvac-medconsult
+cd qvac-medconsult
 npm install                     # also compiles native modules for your platform
 
-# 2. Configure the environment
-cp .env.example .env            # then edit .env — see the table below
+# 2. Verify the SDK + model constant resolved (must be silent, then print true)
+npx tsc --noEmit
+node -e "const s=require('@qvac/sdk'); console.log('MedPsy:', !!s.HEALTHCARE_4B_MEDICAL_Q4_K_M)"
 
-# 3. Fund the wallet (account 0 = buyer): Sepolia ETH for gas + test USD₮ (faucets below)
+# 3. Configure the environment — .env.example has a ready-made block for each chain option
+cp .env.example .env
 
-# 4. Benchmark this machine → bench-profile.json (picks the best sellable model)
-npm run bench
+# 4. Either: a local chain, no faucet needed (see docs/RUNNING.md §2)
+cd contracts && npx hardhat node                                    # terminal 1
+cd contracts && npx hardhat run scripts/deploy-local.ts --network localhost   # terminal 2
+#     Or:  fund the ASKER wallet (account 0) with Sepolia ETH + test USD₮
 
-# 5. Run something — e.g. the headline demo, or the desktop app
-npm run demo
+# 5. Benchmark the health worker's machine → bench-profile.json
+npm run bench                   # confirm "backend": "gpu" and the MedPsy model
+
+# 6. Pre-download the model once (~2.7 GB), then Ctrl-C
+npm run sell                    # wait for "model ready"
 ```
 
-The desktop app can also be **downloaded prebuilt** (no toolchain needed) from
-[GitHub Releases](https://github.com/Conduit-Organization/conduit/releases) — see [Running it](#running-it).
+> If `npm install` fails with `ENOTEMPTY … bare-runtime`, an earlier install was interrupted and
+> `@qvac/sdk` is half-written. Fix:
+> `rm -rf node_modules/bare-runtime node_modules/.bare-runtime-* && npm install`
 
 ---
 

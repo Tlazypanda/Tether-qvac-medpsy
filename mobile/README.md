@@ -60,6 +60,9 @@ Each of these is a real failure mode, not a precaution:
 
 ## First run on real devices
 
+> Prefer the full walkthrough in [`docs/RUNNING.md`](../docs/RUNNING.md) (§7 covers mobile, and §1–4
+> the laptop-side prep you need first). The short version follows.
+
 Two phones, both physical. **A = health worker** (needs GPU + ~2.7 GB free), **B = asker**.
 
 ```bash
