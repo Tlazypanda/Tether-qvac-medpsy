@@ -3,7 +3,13 @@
 </p>
 
 <p align="center">
-  <b>A serverless, peer-to-peer marketplace for AI inference — where a settled USD₮ payment is the access handshake.</b>
+  <b>Offline, peer-to-peer medical consults — QVAC MedPsy-4B drafts on a health worker's device,
+  a human approves, and a testnet USD₮ voucher settles P2P with no internet.</b>
+</p>
+
+<p align="center">
+  <i>A fork of <a href="https://github.com/Conduit-Organization/conduit">Conduit</a> (Apache-2.0).
+  See <a href="#what-changed-vs-upstream-conduit">what changed vs upstream</a>.</i>
 </p>
 
 <p align="center">
@@ -16,18 +22,34 @@
 
 ---
 
-A peer with a GPU sells LLM inference over an end-to-end-encrypted Holepunch link; a buyer's agent pays
-per inference in USD₮, wallet-to-wallet, with **no platform in the middle**. No payment → no handshake →
-the model is never reached. Model weights never move; only prompt-bytes-in / token-bytes-out cross the
-wire; **the cloud sees nothing**. Every model runs fully on-device through the **QVAC runtime**.
+Two roles, two devices, no internet.
 
-> **Testnet only.** Payments use test USD₮ on Ethereum Sepolia — no real money moves. This is a
-> demonstration of the access-control + settlement primitive, not a live financial service.
+- **Asker** — a community member or under-resourced health worker whose device carries **no medical
+  model at all**. They send a health question over a local peer-to-peer link.
+- **Health worker** — carries **QVAC MedPsy-4B** and fields consults. Their device drafts a clinical
+  response (severity read + management plan) locally in seconds. The health worker **reviews the
+  draft, can edit it, and taps Approve & Send** — nothing goes out unsupervised. On approval the
+  answer is delivered and a signed micropayment in test USD₮ settles peer-to-peer as an off-chain
+  voucher against a pre-funded escrow channel, so that moment needs no internet.
 
-**Live:** [conduitt.xyz](https://www.conduitt.xyz) · **Pitch:** [conduitt.xyz/pitch](https://www.conduitt.xyz/pitch)
+Model weights never move; only prompt-bytes-in / token-bytes-out cross the wire; **the cloud sees
+nothing**. Every model runs fully on-device through the **QVAC runtime**.
+
+> **Not medical advice.** Answers are an AI-assisted draft reviewed by a human health worker before
+> sending — not a substitute for professional medical care in an emergency.
+
+> **Testnet only.** Payments use test USD₮ on Ethereum Sepolia, or a throwaway local Hardhat chain —
+> no real money moves, ever. A demonstration of the access-control + settlement primitive, not a
+> live financial service.
+
+> **The channel is the one step that touches the internet.** Opening (or topping up) the escrow
+> channel is an on-chain transaction. It happens **visibly before** the airplane-mode moment; the
+> consult, the draft, the approval and the voucher do not need a network at all. See the
+> [shoot-day checklist](#reproducing-the-demo-shoot-day-checklist).
 
 ## Contents
 
+- [What changed vs upstream Conduit](#what-changed-vs-upstream-conduit)
 - [How it works](#how-it-works)
 - [Demo hardware](#demo-hardware)
 - [Prerequisites](#prerequisites)
@@ -40,34 +62,63 @@ wire; **the cloud sees nothing**. Every model runs fully on-device through the *
 - [Models](#models)
 - [Audit log](#audit-log)
 - [Remote APIs — the no-cloud guarantee](#remote-apis--the-no-cloud-guarantee)
-- [Reproducing the demo](#reproducing-the-demo)
+- [Reproducing the demo (shoot-day checklist)](#reproducing-the-demo-shoot-day-checklist)
 - [Repository layout](#repository-layout)
 - [License](#license)
 
 ---
 
+## What changed vs upstream Conduit
+
+This fork keeps Conduit's hard infrastructure — Hyperswarm/Holepunch discovery, the `ConduitEscrow`
+EIP-712 voucher channel, the capability prober, the reputation + freeloader-rejection handshake, and
+the JSONL audit log — and retargets it at a single, narrower story. Nothing here was rebuilt from
+scratch; attribution and the Apache-2.0 licence are intact.
+
+| # | Change | Why |
+|---|---|---|
+| 1 | **Model swap** — serve only `HEALTHCARE_4B_MEDICAL_Q4_K_M` (QVAC MedPsy-4B, ~2.7 GB) instead of the general-purpose Qwen3 tiers. Uses the `@qvac/sdk` registry constant, which carries a pinned commit sha + sha256, so every device fetches byte-identical weights. Requires `@qvac/sdk >= 0.16.0`. | The demo is a medical consult, not general chat. The seller node now refuses to advertise a non-MedPsy model even if a stale `bench-profile.json` picks one. |
+| 2 | **Routing simplified** — the asker has no model, so there is no local draft and no confidence router. Every consult goes straight to a paid health-worker peer. `SpendPolicy` (per-call cap + session budget) is kept unchanged. | Upstream escalates to a peer only when a local draft looks weak. Here the payment's reason to exist is compensating a human's time and expertise, not covering for a weak device. |
+| 3 | **Human-approval gate (the main new feature)** — a consult is now a state machine: `queued → drafting → awaiting_review → approved \| rejected`. The draft parks on `awaiting_review` indefinitely and is **not sent anywhere** until a person decides. On approval the (possibly edited) answer is delivered **and** the voucher is signed in the same step; on rejection nothing is delivered and nothing is charged. | Unsupervised medical AI output is a real safety problem. Upstream's provider path returns inference automatically — there was no human in the loop to add. |
+| 4 | **A UI for the provider role** — upstream's seller is headless (`npm run sell`), with the only UI on the buyer side. The seller now serves its own dependency-free approval screen (SSE-streamed draft tokens, edit box, Approve/Reject), bound to loopback by default since it can release an answer and authorise a payment. | A human-approval gate needs a human-facing surface on the device doing the approving, and it has to read clearly on camera. |
+| 5 | **Rebrand + own DHT topic** — buyer/seller → Asker/Health Worker throughout; topic is `medconsult:demo:v1`, never upstream's live `conduit:market:v1`. | Keeps our testing off the live Conduit marketplace, and keeps real Conduit buyers away from a node that only speaks the consult protocol. |
+| 6 | **Persistent medical disclaimer** — on the health worker's approval screen and inside the asker's answer bubble (so it cannot be scrolled away from the text it qualifies). | Mirrors QVAC MedPsy's own framing: an assistant, not a doctor. |
+| 7 | **Offline discovery** (`src/core/swarm.ts`, `npm run bootstrap`) — optional LAN-local DHT bootstrap via `MEDCONSULT_BOOTSTRAP=host:port`. Unset leaves upstream's public-DHT behaviour unchanged. | Upstream's nodes bootstrap off the **public** Holepunch DHT, which needs the internet. This demo claims airplane mode, so discovery has to work with no route out. |
+| 8 | **Local test chain** (`contracts/scripts/deploy-local.ts`) — deploy MockUSDT + ConduitEscrow to a throwaway Hardhat chain and fund both roles. | Upstream only ships a Sepolia deploy, so the full loop needed a faucet round trip. This makes the approval gate testable with no faucet and no real keys. |
+| 9 | **Chain-aware testnet notice** — `testnetNotice(chainId)` names the chain actually in use. | The old constant hardcoded "on Sepolia"; reading that off a screen while connected to chain 31337 would be a false claim on camera. |
+| 10 | **Audit log additions** — `approved_by_human`, `review_ms`, `draft_ms`, and a `rejected_by_human` outcome, alongside upstream's `cloud_bytes: 0` and backend fields. | This is the artifact that proves the run was not fully autonomous. |
+
+**Still upstream, deliberately untouched:** the escrow contract and voucher scheme, the payment-gated
+QVAC provider firewall, the prober, reputation, and the audit logger itself.
+
+---
+
 ## How it works
 
-One app is both **buyer** and **seller** — the role is a runtime choice, not a separate product. A node
-learns what it can sell by benchmarking its own hardware (the **capability prober**, `npm run bench`).
+One codebase runs both roles — **asker** and **health worker** is a runtime choice, not a separate
+product. A node learns what it can serve by benchmarking its own hardware (the **capability prober**,
+`npm run bench`).
 
-The buyer→answer path has four hops:
+The consult→answer path has five hops:
 
-1. **Discover** — peers meet on a Hyperswarm/Holepunch DHT (topic `conduit:market:v1`) with NAT
-   hole-punching. There is no server in the middle. The seller advertises an offer (model + price + tps).
-2. **Route** — an on-device **confidence router** samples a small local model *k* times and measures
-   self-consistency (QVAC exposes no logprobs, so we use answer stability). Easy/consistent prompts are
-   answered **free, locally**; only hard/ambiguous ones **escalate** to a paid peer.
-3. **Pay** — escalation opens an **escrow payment channel** (one on-chain deposit), then settles each
-   answer **off-chain** with a signed **EIP-712 voucher** — answers come back in ~2s with no on-chain
-   wait. (A simpler per-inference on-chain payment path also exists.) A **SpendPolicy** (per-call cap +
-   session budget) authorizes the spend; if it declines, the buyer keeps the free local draft.
-4. **Run** — the payment releases the seller's **firewall-gated QVAC provider** pubkey; the buyer
-   delegates inference to it over the E2E link. The model executes **on the seller's device** — the
-   buyer never sees the weights, the seller never sees the buyer's keys, and no prompt touches a cloud.
+1. **Discover** — peers meet on a Hyperswarm/Holepunch DHT (topic `medconsult:demo:v1`) with NAT
+   hole-punching. There is no server in the middle. The health worker advertises an offer (model +
+   price + tps). Set `MEDCONSULT_BOOTSTRAP` to keep discovery on a LAN with no internet.
+2. **Delegate** — the asker carries no model, so there is no local draft and no confidence router:
+   every consult goes straight to a paid peer. A **SpendPolicy** (per-call cap + session budget)
+   authorizes the spend; if it declines, nothing is sent.
+3. **Pay** — the first consult opens an **escrow payment channel** (one on-chain deposit), then each
+   answer settles **off-chain** with a signed **EIP-712 voucher** — no on-chain wait and no network at
+   settlement time. The channel only touches the chain again when the health worker claims the balance.
+4. **Draft** — the payment releases the health worker's **firewall-gated QVAC provider** pubkey and
+   MedPsy-4B drafts a severity read + management plan **on the health worker's device**. The asker
+   never sees the weights, the health worker never sees the asker's keys, and no prompt touches a cloud.
+5. **Approve** — the draft **stops here** and waits on a human. The health worker reads it, edits it if
+   needed, and taps **Approve & Send** (or **Reject**). Only on approval is the answer delivered and
+   the voucher signed — in the same step. There is deliberately no timeout on human judgement.
 
 A **freeloader** (no payment) is refused at the Noise handshake having transferred **0 bytes**. First-party
-**reputation** (served/failed + EWMA tok/s) ranks sellers in the marketplace.
+**reputation** (served/failed + EWMA tok/s) ranks peers in the marketplace.
 
 For deeper architecture notes see [`docs/CONDUIT-ARCHITECTURE.md`](./docs/CONDUIT-ARCHITECTURE.md) and the
 diagrams in [`docs/diagrams/`](./docs/diagrams/).
@@ -76,18 +127,23 @@ diagrams in [`docs/diagrams/`](./docs/diagrams/).
 
 ## Demo hardware
 
-The demo runs across **two physical machines** on independent networks (a third "freeloader" role is a
-separate process + keypair on the buyer machine, not a third device). Both machines run the same `conduit`
-codebase; buyer/seller is a runtime flag.
+The demo runs across **two devices on the same local network** (a "freeloader" role is a separate
+process + keypair on the asker's machine, not a third device). Both run the same codebase;
+asker/health worker is a runtime flag.
 
 | Role | Machine | CPU | GPU | RAM | Storage | OS |
 |------|---------|-----|-----|-----|---------|-----|
-| **Buyer** (router + agent + wallet) | Linux laptop | AMD Ryzen 7 7435HS — 8 cores / 16 threads | NVIDIA GeForce RTX 4050 Laptop — 6 GB VRAM, Vulkan, driver 580.82 | 24 GB DDR5 | NVMe SSD (~10 GB free for the model cache) | Pop!_OS 24.04 LTS, kernel 6.16 |
-| **Seller** (GPU provider) | MacBook Air (M5) | Apple M5 — Apple Silicon | Apple integrated GPU (Metal) | 16 GB unified memory | SSD (~10 GB free) | macOS 15+ |
+| **Asker** (no model — agent + wallet only) | Linux laptop | AMD Ryzen 7 7435HS — 8 cores / 16 threads | NVIDIA GeForce RTX 4050 Laptop — 6 GB VRAM, Vulkan, driver 580.82 | 24 GB DDR5 | NVMe SSD | Pop!_OS 24.04 LTS, kernel 6.16 |
+| **Health worker** (MedPsy-4B + approval screen) | MacBook Air (M5) | Apple M5 — Apple Silicon | Apple integrated GPU (Metal) | 16 GB unified memory | SSD (~10 GB free for the model cache) | macOS 15+ |
 
-> Either machine can fill either role; this table reflects the recorded demo. Models execute on the GPU
-> (the audit log records `"backend":"gpu"`). VRAM/unified-memory needed: ~0.5 GB for the 0.6B router model,
-> ~3 GB for the Qwen3-4B seller tier.
+> The roles are **not** interchangeable here: only the health worker's device needs the GPU and the
+> ~2.7 GB MedPsy-4B cache. The asker's device deliberately carries no model at all. Inference runs on
+> the GPU (the audit log records `"backend":"gpu"`); MedPsy-4B Q4_K_M needs ~3 GB of unified memory.
+
+> **Networking matters more than you'd think.** Both devices need a real private-LAN address. A USB
+> tethering link (`192.0.0.2/32`, `NOARP` on macOS) is not a LAN and Holepunch cannot connect over it —
+> discovery fails with a bare 30-second timeout. Verified the hard way; see step 1 of the
+> [checklist](#reproducing-the-demo-shoot-day-checklist).
 
 ---
 
@@ -197,15 +253,21 @@ One run: ① a cheap local 0.6B answers an easy prompt **free**; ② the agent d
 **pays 0.01 USD₮**, and gets a SoTA answer from Qwen3-4B over E2E P2P; ③ a **freeloader is refused at
 the handshake (0 bytes)** — with a live USD₮ ledger, a `cloud_bytes=0` counter, and a JSONL audit.
 
-### Two machines (the real P2P demo)
+### Two devices (the real consult demo)
 ```bash
-# Machine A (seller):
-npm run sell        # benchmarks, advertises an offer on the DHT, waits for paying buyers
+# Either device — a LAN-local DHT bootstrap so discovery needs no internet:
+npm run bootstrap   # prints MEDCONSULT_BOOTSTRAP=<ip>:49737
 
-# Machine B (buyer):
-npm run buy         # discovers the seller, routes, pays, delegates
+# Device A (health worker): loads MedPsy-4B, serves the approval screen on :8799
+MEDCONSULT_BOOTSTRAP=<ip>:49737 npm run sell
+
+# Device B (asker): carries no model — every consult goes to the paid peer
+MEDCONSULT_BOOTSTRAP=<ip>:49737 CONSULT="…" npm run ask
 ```
-Both join the Hyperswarm topic `conduit:market:v1`; discovery and NAT hole-punching are automatic.
+Both join the Hyperswarm topic `medconsult:demo:v1`; discovery and NAT hole-punching are automatic.
+Omit `MEDCONSULT_BOOTSTRAP` to use the public Holepunch DHT as upstream does (needs internet to
+bootstrap). The draft waits on the approval screen — **nothing reaches the asker until a human taps
+Approve & Send.** Full sequence: [shoot-day checklist](#reproducing-the-demo-shoot-day-checklist).
 
 ### Chat + wallet web app
 ```bash
@@ -231,8 +293,10 @@ npm run audit               # loads models, runs inference, unloads — writes A
 | `npm run dist` | build the Electron desktop app → `release/` |
 | `npm run demo` | headline: local-free → pay-to-escalate (4B) → freeloader-refused, with ledger + audit |
 | `npm run audit` | model load/unload + inference performance → `AUDIT_LOG.jsonl` (no testnet needed) |
-| `npm run market` | serverless storefront — independent seller + buyer meet over Hyperswarm and negotiate |
-| `npm run sell` / `npm run buy` | run a seller / buyer node on its own (two machines / two terminals) |
+| `npm run market` | serverless storefront — independent peers meet over Hyperswarm and negotiate |
+| **`npm run sell`** | **health worker**: loads MedPsy-4B, serves the approval screen (:8799), waits for consults |
+| **`npm run ask`** | **asker** (aliases: `consult`, `buy`): no local model — delegates the consult to a paid peer |
+| **`npm run bootstrap`** | LAN-local DHT bootstrap node so peer discovery needs no internet |
 | `npm run agent` | autonomous buyer: confidence router + spend policy (free / pay / budget-decline) |
 | `npm run route` | confidence router on easy vs. hard prompts (self-consistency, no logprobs) |
 | `npm run bench` | capability prober — benchmarks the local GPU, writes `bench-profile.json` |
@@ -245,16 +309,20 @@ npm run audit               # loads models, runs inference, unloads — writes A
 
 ## Models
 
-Open-weight models run fully on-device via QVAC; they download on demand into `~/.qvac` and are picked
-per machine by the prober. Recorded tiers:
+This fork serves exactly **one** model. Open-weight, runs fully on-device via QVAC, downloads on demand
+into `~/.qvac`:
 
-| Model | Role | Throughput (RTX 4050) |
-|-------|------|-----------------------|
-| Qwen3 **0.6B** (Q4) | local router / draft | ~180–290 tok/s |
-| Llama 3.2 **1B** (tool-calling, Q4) | small seller tier | ~183 tok/s |
-| Qwen3 **1.7B** (Q4) | seller tier | ~118 tok/s |
-| Qwen3 **4B** (Q4_K_M) | **recommended seller tier** | ~60–65 tok/s |
-| EmbeddingGemma **300M** (Q4) | router self-consistency embedding | — |
+| Model | Role | Size | Measured (Apple M-series GPU) |
+|-------|------|------|-------------------------------|
+| **QVAC MedPsy-4B** (Q4_K_M, imatrix) | the health worker's serving model — the only tier | ~2.7 GB | ~4 s load from cache · 0.9–8 s TTFT · ~10–26 tok/s |
+
+Referenced as the `@qvac/sdk` registry constant `HEALTHCARE_4B_MEDICAL_Q4_K_M`, which pins a commit sha
+and sha256 so every device fetches byte-identical weights (needs `@qvac/sdk >= 0.16.0`). The asker's
+device loads **no model at all**.
+
+> Upstream's Qwen3 / Llama / EmbeddingGemma tiers and the MedPsy-1.7B tier are intentionally unused —
+> there is no local-draft or confidence-router path in this fork. The seller node refuses to advertise
+> a non-MedPsy model even if a stale `bench-profile.json` picks one.
 
 (Throughput from `npm run bench` / `npm run audit` on the demo hardware above.)
 
@@ -275,15 +343,24 @@ performance; the committed [`AUDIT_LOG.sample.jsonl`](./AUDIT_LOG.sample.jsonl) 
 | `model_unload` | `model`, `unload_ms` |
 | `p2p` | `sub` (`gate_opened` / `handshake_granted` / `handshake_rejected`), peer keys, `bytes_served` |
 | `settlement` | `network`, `amount_usdt`, `to`, `tx`, `status` |
+| `consult` (fork) | `approved_by_human`, `outcome`, `review_ms`, `draft_ms`, `edited`, `cloud_bytes` |
 
-Example inference line (real, from `npm run audit`):
+Each role writes its own log: `AUDIT_LOG.health-worker.jsonl` and `AUDIT_LOG.asker.jsonl` (both
+gitignored; the `*-sample.jsonl` files are committed artifacts).
+
+Example inference line (real, from `npm run audit` on this fork):
 
 ```json
-{"event":"inference","model":"QWEN3_4B_INST_Q4_K_M","role":"seller-tier","prompt":"In two sentences, explain why a stablecoin can lose its 1:1 peg to the dollar.","prompt_tokens":33,"completion_tokens":75,"total_tokens":108,"ttft_ms":51.43,"tps":63.74,"backend":"gpu","cloud_bytes":0}
+{"event":"inference","model":"HEALTHCARE_4B_MEDICAL_Q4_K_M","role":"health-worker","prompt":"Patient is 61 with known type 2 diabetes. A small blister on the sole of the right foot has been there 2 weeks, now with surrounding redness and a bad smell. No fever. They say it does not hurt much.","prompt_tokens":222,"completion_tokens":160,"total_tokens":382,"ttft_ms":894.44,"tps":17.91,"backend":"gpu","cloud_bytes":0}
 ```
 
-`"backend":"gpu"` proves on-device execution; `"cloud_bytes":0` proves nothing went to a cloud. The
-on-chain settlement + handshake story (per-inference payment, freeloader rejection) is in
+`"backend":"gpu"` proves on-device execution; `"cloud_bytes":0` proves nothing went to a cloud.
+
+**The fork's addition:** `approved_by_human` plus `review_ms` is the evidence the answer was **not**
+autonomous — a human read the draft for that many milliseconds and chose to send it. A declined consult
+logs `approved_by_human: false` with `outcome: "rejected_by_human"` and is never charged.
+
+The on-chain settlement + handshake story (per-inference payment, freeloader rejection) is in
 [`AUDIT_LOG.settlement-sample.jsonl`](./AUDIT_LOG.settlement-sample.jsonl), produced by `npm run demo`.
 
 ---
@@ -301,24 +378,66 @@ Full disclosure: [`REMOTE_APIS.md`](./REMOTE_APIS.md).
 
 ---
 
-## Reproducing the demo
+## Reproducing the demo (shoot-day checklist)
 
-1. Provision two machines per [Demo hardware](#demo-hardware) (or run both roles on one box — note the
-   shared `~/.qvac/.worker.lock` warning; harmless).
-2. On each: `git clone` → `npm install` → `cp .env.example .env` and set `CONDUIT_RPC_URL`,
-   `CONDUIT_CHAIN_ID=11155111`, `CONDUIT_USDT_ADDRESS=0xd077A400968890Eacc75cdc901F0356c943e4fDb`,
-   `CONDUIT_WALLET_MNEMONIC=<testnet seed>`, and (for instant channels) `CONDUIT_ESCROW=1` +
-   `CONDUIT_ESCROW_ADDRESS=0x741BbE3B2d19E1aE965467280Cc2a442F3632Ee7`.
-3. Fund the buyer wallet: Sepolia ETH (gas) + test USD₮.
-4. `npm run bench` on both → each writes its `bench-profile.json` (the Mac picks Qwen3-4B as its tier).
-5. Seller machine: `npm run sell`. Buyer machine: `npm run buy` (or the desktop app / `npm run start`).
-6. Ask an easy question → answered free on-device. Ask a hard one → channel opens, peer is paid, the
-   4B answers over E2E in ~2s. A freeloader process is refused at the handshake.
-7. Inspect `AUDIT_LOG.jsonl` for model loads/unloads + per-inference `ttft_ms` / `tps` / tokens, and
-   `cloud_bytes:0` throughout. `npm run audit` reproduces the model-lifecycle log with no testnet.
+Two devices: **A = health worker** (needs the GPU — it runs MedPsy-4B), **B = asker** (carries no
+model). Follow in order; the online steps are deliberately all before the airplane-mode moment.
 
-**Expected numbers** (demo hardware): 0.6B local ~8–25 ms TTFT, ~180–290 tok/s · Qwen3-4B ~50 ms TTFT,
-~60–65 tok/s · on-chain settle ~7 s on Sepolia · `cloud_bytes = 0` throughout.
+### Phase 1 — while still online (off camera, or shown as setup)
+
+- [ ] 1. Both devices on the **same Wi-Fi or hotspot**. Confirm each has a real private-LAN address
+      (`192.168.x` / `10.x` / `172.16–31.x`). An iPhone **USB-tethering** link (`192.0.0.2/32`,
+      `NOARP`) is **not** a LAN — Holepunch cannot connect over it and discovery will fail with a bare
+      30-second timeout.
+- [ ] 2. On each: `npm install` → `cp .env.example .env`. Sepolia: `CONDUIT_CHAIN_ID=11155111`,
+      `CONDUIT_USDT_ADDRESS=0xd077A400968890Eacc75cdc901F0356c943e4fDb`, `CONDUIT_ESCROW=1`,
+      `CONDUIT_ESCROW_ADDRESS=0x741BbE3B2d19E1aE965467280Cc2a442F3632Ee7`. For a faucet-free
+      rehearsal use the local chain instead (`npx hardhat node` +
+      `npx hardhat run scripts/deploy-local.ts --network localhost`) and copy the values it prints.
+- [ ] 3. Fund the **asker** wallet (account 0): Sepolia ETH for gas + test USD₮. Skip on the local chain
+      — the deploy script funds both roles.
+- [ ] 4. On device A: `npm run bench` → writes `bench-profile.json`. Confirm it picks
+      `HEALTHCARE_4B_MEDICAL_Q4_K_M` and reports `backend: "gpu"`.
+- [ ] 5. **Pre-download the model on A**: first load pulls ~2.7 GB. Start `npm run sell` once and wait
+      for `model ready`. From cache it then loads in ~4 s instead of minutes.
+- [ ] 6. **Open the escrow channel now, on camera if you like — this is the one step that needs the
+      internet.** Run one throwaway consult end to end (steps 9–12). The channel opens on-chain and is
+      pre-funded; from here on, vouchers settle off-chain with no network.
+- [ ] 7. Start the LAN-local DHT bootstrap on either device: `npm run bootstrap`. Note the
+      `MEDCONSULT_BOOTSTRAP=<ip>:49737` line it prints. If it warns that it fell back to loopback,
+      fix the network before continuing — loopback only works for both roles on one machine.
+
+### Phase 2 — airplane mode (the shot)
+
+- [ ] 8. **Enable airplane mode on both devices, then rejoin the local Wi-Fi/hotspot only.** Prove it on
+      camera: `curl https://example.com` should fail.
+- [ ] 9. Device A: `MEDCONSULT_BOOTSTRAP=<ip>:49737 npm run sell`. Confirm the startup lines read
+      `discovery: LAN-local DHT via <ip> (no internet needed)` and
+      `review consults at http://127.0.0.1:8799`. Open that screen — it is the approval surface.
+- [ ] 10. Device B: `MEDCONSULT_BOOTSTRAP=<ip>:49737 CONSULT="…" npm run ask` (or the desktop app).
+       Confirm the banner names the right chain and says this device carries no medical model.
+- [ ] 11. On A's screen: the draft streams in token by token, then parks on **AWAITING HUMAN REVIEW**.
+       Nothing has been sent. Edit a word or two so `edited: true` shows up in the log.
+- [ ] 12. Tap **Approve & Send**. B receives the answer with the disclaimer beneath it; the voucher is
+       signed in the same step. B's stamp reads *Reviewed & approved by a health worker*.
+- [ ] 13. Show the **reject** path too: send a second consult and tap **Reject**. B reports
+       *Health worker did not approve* — a human decision, not an error — and is **not** charged.
+
+### Phase 3 — the proof
+
+- [ ] 14. `AUDIT_LOG.health-worker.jsonl` — one line per consult with `approved_by_human: true`,
+       `review_ms`, `draft_ms`, `backend: "gpu"`, `cloud_bytes: 0`, plus a `rejected_by_human` line
+       for step 13.
+- [ ] 15. `AUDIT_LOG.asker.jsonl` — the asker's view of the same consult, `cloud_bytes: 0`.
+- [ ] 16. Back online, the health worker claims the accumulated balance on-chain → the settlement event.
+
+**Expected numbers** (demo hardware, MedPsy-4B Q4_K_M on Apple-silicon GPU): model load ~4 s from
+cache · draft ~0.9–8 s TTFT, ~10–26 tok/s · review time is however long the human takes (that is the
+point) · `cloud_bytes = 0` throughout.
+
+> **Fallback.** If the mobile port is not reliable in time, run the same checklist on two laptops.
+> That is still a fully real demonstration of the same story — just not in-hand on phones. Say so
+> rather than shipping something flaky.
 
 ---
 
@@ -331,11 +450,15 @@ electron/    desktop shell (spawns the engine as a child process)
 landing/     marketing site + /pitch deck (Next.js) — conduitt.xyz
 src/
   core/      identity · env · config · wallet · escrow · audit · ledger · prober · pricing · protocol · reputation · keystore
+             medconsult (model + topic + prompt + disclaimer) · swarm (LAN-local DHT)   ← fork
   sell/      provider              (payment-gated QVAC provider)
+             consult (MedPsy draft + approval state machine)                            ← fork
+             approval-server · approval-page (the health worker's review screen)        ← fork
   buy/       router · agent · market-agent · policy · storefront · consumer
-  node/      sell · buy            (independent storefront nodes)
+  node/      sell · buy            (health worker / asker nodes)
   web/       server · seller       (engine API: /api/state + /api/ask — and serves the built app)
   scripts/   demo · audit-demo · market-demo · agent-demo · route-test · bench · slice · escrow-demo
+             bootstrap (LAN-local DHT bootstrap node)                                   ← fork
   spikes/    01-firewall · 02-settlement · 03-prober-delegate
 docs/        architecture, build phases, diagrams, submission copy
 ```
@@ -345,3 +468,11 @@ docs/        architecture, build phases, diagrams, submission copy
 ## License
 
 [Apache-2.0](./LICENSE). Testnet demonstration only — not a live money-transmission service.
+
+A fork of [Conduit](https://github.com/Conduit-Organization/conduit) by the Conduit Organization, used
+under Apache-2.0 with the licence and attribution intact. The P2P discovery, escrow voucher channel,
+capability prober, reputation system and audit logger are their work; see
+[what changed vs upstream](#what-changed-vs-upstream-conduit) for what this fork added.
+
+**Not medical advice.** Answers are an AI-assisted draft reviewed by a human health worker before
+sending — not a substitute for professional medical care in an emergency.
