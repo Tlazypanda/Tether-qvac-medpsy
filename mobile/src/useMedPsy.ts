@@ -48,6 +48,18 @@ function num(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 }
 
+/**
+ * Remove any reasoning block that leaks into the content stream. Mirrors stripThinking() in
+ * src/sell/consult.ts — with captureThinking:true the desktop build showed a full draft, a bare
+ * `</think>`, then the real answer starting over and truncating. Keep the two in step.
+ */
+function stripThinking(text: string): string {
+  let out = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  const close = out.lastIndexOf('</think>');
+  if (close !== -1) out = out.slice(close + '</think>'.length);
+  return out.replace(/<\/?think>/gi, '').trim();
+}
+
 export function useMedPsy() {
   const [ready, setReady] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -150,7 +162,9 @@ export function useMedPsy() {
           { role: 'user', content: c.question },
         ],
         stream: true,
-        captureThinking: true,
+        // See stripThinking() above — capturing reasoning merged it into the draft, blew the token
+        // budget and truncated the real answer. We never display reasoning, so don't capture it.
+        captureThinking: false,
         kvCache: false, // each consult is independent — no leakage between patients
         generationParams: { predict: CONSULT_PREDICT_TOKENS, reasoning_budget: 0 },
       });
@@ -166,7 +180,7 @@ export function useMedPsy() {
       const final = await run.final.catch(() => null);
       const s = final?.stats ?? {};
       if (!text.trim() && final?.contentText) text = String(final.contentText);
-      text = text.trim();
+      text = stripThinking(text);
 
       const draftedAt = Date.now();
       patch(c.id, {

@@ -9,10 +9,17 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import Hyperswarm from 'hyperswarm';
 import { verifyMessage, JsonRpcProvider, HDNodeWallet, type BaseWallet } from 'ethers';
+import { loadEnv } from '../core/env';
 import { randomSeedHex } from '../core/identity';
 import { MEDPSY_MODEL, MEDCONSULT_TOPIC } from '../core/medconsult';
 import { swarmOptions, discoveryMode } from '../core/swarm';
 import type { Consult } from '../sell/consult';
+
+// Merge `.env` into process.env FIRST. Ordering is load-bearing: PROVIDER_SEED below, and
+// CONDUIT_ESCROW / HW_UI_* later, are read straight off process.env. Without this, `CONDUIT_ESCROW=1`
+// in `.env` did nothing and this node advertised an offer with no payment-channel support, which the
+// asker reported as "this health worker does not accept payment channels".
+loadEnv();
 
 // Fork note: a distinct topic from upstream's `conduit:market:v1`, so this node never meets a real
 // Conduit buyer (which would speak the delegation protocol, not the consult protocol) and our
@@ -122,7 +129,11 @@ async function balanceOrNull(): Promise<bigint | null> {
 // ── med-consult: local drafting + the human-approval gate ───────────────────────────────────────
 // The consult queue owns the MedPsy handle and parks each draft on `awaiting_review` until a human
 // decides. The approval server is the health worker's screen (upstream's provider role is headless).
-const audit = makeAudit(process.env.CONDUIT_AUDIT_LOG || 'AUDIT_LOG.jsonl');
+// Per-role log, matching the asker's `AUDIT_LOG.asker.jsonl`. It used to default to the generic
+// `AUDIT_LOG.jsonl`, which was wrong twice over: the docs told you to read the health-worker file
+// (which then stayed empty and made a good run look like a failed one), and it collided with
+// `npm run audit`, so each clobbered the other's evidence.
+const audit = makeAudit(process.env.CONDUIT_AUDIT_LOG || 'AUDIT_LOG.health-worker.jsonl');
 let connectedPeers = 0;
 
 const queue = createConsultQueue({

@@ -1,9 +1,9 @@
 // Escrow payment-channel lifecycle demo — exercises ConduitEscrow on live Sepolia with real test-USD₮.
 // Proves the whole money-flow with our client: open → off-chain vouchers → seller claim → settle + refund.
 // Buyer = wallet account 0, seller = account 1 (the same split the storefront uses). Run: npm run escrow-demo
-import { HDNodeWallet, JsonRpcProvider, Contract, formatUnits, type Wallet } from 'ethers';
+import { HDNodeWallet, Contract, formatUnits, type Wallet } from 'ethers';
 import { loadEnv } from '../core/env';
-import { createEscrowClient, loadEscrowDeployment } from '../core/escrow';
+import { createEscrowClient, loadEscrowDeployment, makeProvider } from '../core/escrow';
 
 const DEC = 6;
 const usd = (n: bigint) => formatUnits(n, DEC) + ' USD₮';
@@ -17,7 +17,9 @@ const dep = loadEscrowDeployment();
 if (!mnemonic) throw new Error('no mnemonic in .env');
 if (!dep) throw new Error('no escrow deployment (contracts/deployed.sepolia.json)');
 
-const provider = new JsonRpcProvider(rpc);
+// makeProvider, not `new JsonRpcProvider`: this demo fires several settlement txs back to back and
+// ethers' 250 ms request cache hands two of them the same nonce on a local chain. See core/escrow.ts.
+const provider = makeProvider(rpc);
 const acct = (i: number) => HDNodeWallet.fromPhrase(mnemonic, undefined, `m/44'/60'/0'/0/${i}`).connect(provider) as unknown as Wallet;
 const buyer = acct(0);
 const seller = acct(1);

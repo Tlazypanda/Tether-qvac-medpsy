@@ -380,6 +380,11 @@ Example inference line (real, from `npm run audit` on this fork):
 autonomous — a human read the draft for that many milliseconds and chose to send it. A declined consult
 logs `approved_by_human: false` with `outcome: "rejected_by_human"` and is never charged.
 
+A real captured session is committed as
+[`AUDIT_LOG.consult-sample.jsonl`](./AUDIT_LOG.consult-sample.jsonl) — three consults from one run,
+covering all three outcomes (approved-with-edit, rejected, approved-as-drafted), every line
+`cloud_bytes: 0` and `backend: "gpu"`.
+
 The on-chain settlement + handshake story (per-inference payment, freeloader rejection) is in
 [`AUDIT_LOG.settlement-sample.jsonl`](./AUDIT_LOG.settlement-sample.jsonl), produced by `npm run demo`.
 

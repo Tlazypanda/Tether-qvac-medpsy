@@ -6,9 +6,9 @@
 // (Generalises src/node/buy.ts to many sellers + a long-lived process.)
 import crypto from 'node:crypto';
 import Hyperswarm from 'hyperswarm';
-import { Wallet as EthWallet, JsonRpcProvider } from 'ethers';
+import { Wallet as EthWallet } from 'ethers';
 import { send, onMessages, type Msg } from '../core/protocol';
-import { createEscrowClient, type EscrowClient } from '../core/escrow';
+import { createEscrowClient, makeProvider, type EscrowClient } from '../core/escrow';
 import type { Reputation } from '../core/reputation';
 import type { ConduitAccount } from '../core/wallet';
 import { MEDCONSULT_TOPIC } from '../core/medconsult';
@@ -113,7 +113,9 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
   const esc: EscrowClient | null = deps.escrow
     ? createEscrowClient(deps.rpcUrl, deps.escrow.address, deps.escrow.chainId)
     : null;
-  const escrowWallet = esc ? signer.connect(new JsonRpcProvider(deps.rpcUrl)) : null;
+  // makeProvider, not `new JsonRpcProvider`: this wallet picks the nonce for approve()+open(), and
+  // ethers' 250 ms request cache hands both the same one on a fast local chain. See core/escrow.ts.
+  const escrowWallet = esc ? signer.connect(makeProvider(deps.rpcUrl)) : null;
   const sessionStates = new Map<string, SessionState>(); // sellerWallet(lower) → session
   const deposit = deps.depositBaseUnits ?? 1_000_000n; // 1 USD₮ — generous so long sessions/demos don't exhaust (~100 answers @ 0.01)
   const duration = deps.sessionDurationSecs ?? 3600;
@@ -317,6 +319,15 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
     log('[storefront] health worker approved — settling the voucher');
 
     // 3) Pay. The answer text has NOT crossed the wire yet — payment is still the access handshake.
+    //
+    // Register the ANSWER waiter before paying. The health worker sends `drawAck` and then
+    // `consultAnswer` back to back, so both frames routinely arrive in the SAME chunk and
+    // onMessages() dispatches them synchronously. Registering the answer waiter only after
+    // `await drawAck` is therefore too late — the answer has already been dispatched with nobody
+    // listening, silently dropped, and the asker times out on an answer it was actually sent.
+    const answerP = waitFor(rec, `consultAnswer:${requestId}`, 30_000);
+    answerP.catch(() => {}); // mark handled: we may throw on drawAck before awaiting it below
+
     sess.cumulative += price; // running total owed
     const sig = await esc.signVoucher(escrowWallet, seller.sellerWallet, sess.epoch, sess.cumulative);
     send(conn, { type: 'draw', buyerWallet: escrowWallet.address, cumulative: sess.cumulative.toString(), signature: sig });
@@ -324,7 +335,7 @@ export async function createStorefront(deps: StorefrontDeps): Promise<Storefront
     void ready;
 
     // 4) Voucher verified → the approved answer is released.
-    const ans = await waitFor(rec, `consultAnswer:${requestId}`, 30_000);
+    const ans = await answerP;
     return {
       answer: String(ans.answer ?? '').trim(),
       cost: price,

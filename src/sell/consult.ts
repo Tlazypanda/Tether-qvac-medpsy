@@ -137,7 +137,12 @@ export function createConsultQueue(deps: ConsultQueueDeps): ConsultQueue {
           { role: 'user', content: c.question },
         ],
         stream: true,
-        captureThinking: true,
+        // captureThinking:true merged MedPsy's reasoning into the content stream, so the health
+        // worker's screen showed a full draft, then a bare `</think>`, then the REAL answer starting
+        // over and truncating when it hit the token budget. Measured cost: draft_ms went from ~18s
+        // to 95–217s and the delivered answer was cut mid-sentence. We do not display reasoning
+        // anywhere, so don't capture it. `stripThinking` below is the belt-and-braces half.
+        captureThinking: false,
         kvCache: false, // each consult is independent — no leakage between patients
         generationParams: { predict, reasoning_budget: 0 },
       });
@@ -150,7 +155,9 @@ export function createConsultQueue(deps: ConsultQueueDeps): ConsultQueue {
       const final = await run.final.catch(() => null);
       const s = final?.stats ?? {};
       if (!c.draft.trim() && final?.contentText) c.draft = String(final.contentText);
-      c.draft = c.draft.trim();
+      // Strip once the stream is complete: a partial `</think>` split across two deltas cannot be
+      // matched mid-stream, so the live view may flicker, but what the human reviews is clean.
+      c.draft = stripThinking(c.draft);
       c.stats = {
         ttftMs: num(s.timeToFirstToken),
         tps: num(s.tokensPerSecond),
@@ -177,6 +184,21 @@ export function createConsultQueue(deps: ConsultQueueDeps): ConsultQueue {
 
   function num(v: unknown): number | undefined {
     return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  }
+
+  /**
+   * Remove any reasoning block the model still emits into the content stream.
+   *
+   * Defensive: `captureThinking: false` should prevent this, but a stray `</think>` reaching the
+   * approval screen is a bad thing to discover on camera, and worse to deliver to an asker. Handles
+   * both a well-formed `<think>…</think>` and the observed half-open case where only the closing tag
+   * appears (everything before it was reasoning).
+   */
+  function stripThinking(text: string): string {
+    let out = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+    const close = out.lastIndexOf('</think>');
+    if (close !== -1) out = out.slice(close + '</think>'.length);
+    return out.replace(/<\/?think>/gi, '').trim();
   }
 
   return {

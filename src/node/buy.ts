@@ -9,9 +9,15 @@
 // local model; the answer is drafted, reviewed by a person, and sent as text. See core/protocol.ts.
 //
 // Run:  CONSULT="my symptoms…" npm run ask
+import { loadEnv } from '../core/env';
 import { randomSeedHex, publicKeyHexFromSeed } from '../core/identity';
 import { MEDCONSULT_TOPIC, MEDICAL_DISCLAIMER, testnetNotice } from '../core/medconsult';
 import { discoveryMode } from '../core/swarm';
+
+// Merge `.env` into process.env FIRST. Ordering is load-bearing: CONSULT and CONSUMER_SEED are read
+// a few lines below, long before loadConfig() would otherwise have done it, so without this a
+// perfectly good `.env` setting is silently ignored.
+loadEnv();
 
 void MEDCONSULT_TOPIC; // the topic itself is joined inside the storefront
 

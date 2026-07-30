@@ -4,11 +4,14 @@ From a clean checkout to a working consult, for both targets. If you only read o
 **health worker's device needs a GPU and ~10 GB free**, the asker's device needs neither, and **peer
 discovery needs a real LAN** — see [Troubleshooting](#troubleshooting) before you blame the code.
 
-**Verification legend.** This project's networking could not be exercised on the machine these docs
-were written on, so steps are marked honestly:
+**Verification legend.** Steps are marked with what was actually exercised:
 
 - ✅ **verified** — actually run, output observed
 - ⚠️ **unverified** — written from the code and docs, not yet run end to end
+
+The full desktop loop (discovery → escrow channel → MedPsy draft → human approval/rejection →
+voucher → answer) is ✅ **verified with both roles on one machine.** Two physically separate devices
+and the whole `mobile/` port are still ⚠️.
 
 ---
 
@@ -154,9 +157,10 @@ MEDCONSULT_BOOTSTRAP=<ip>:49737 npm run sell
 MEDCONSULT_BOOTSTRAP=<ip>:49737 CONSULT="My 3-year-old has had a fever of 39C for two days and is pulling at her right ear." npm run ask
 ```
 
-✅ The health worker's side is verified up to and including `model ready` and the approval screen
-rendering at `http://127.0.0.1:8799`. ⚠️ The discovery handshake and everything after it is
-**unverified** — see [Troubleshooting](#troubleshooting).
+✅ The **entire flow** — discovery, escrow channel open, MedPsy draft, human approval, voucher
+settlement, answer delivery — is verified with both roles on one machine over a LAN-local DHT.
+⚠️ Two *physically separate* devices are still unverified: it needs a real private-LAN address on
+both, which the machine this was developed on does not have.
 
 ### Then: approve on the health worker's device
 
@@ -173,11 +177,11 @@ review from a phone on the same LAN, opt in explicitly:
 HW_UI_HOST=0.0.0.0 HW_UI_PORT=8799 npm run sell
 ```
 
-### Both roles on one machine
+### Both roles on one machine ✅
 
-Same as above in two terminals. The asker is account 0 and the health worker account 1 of the same
-mnemonic, so they are distinct wallets. ⚠️ Discovery between two processes on one host did **not**
-work on the machine these docs were written on (see Troubleshooting) — it may work on yours.
+Same as above in two terminals, with `npm run bootstrap` on loopback. The asker is account 0 and the
+health worker account 1 of the same mnemonic, so they are distinct wallets. This is the configuration
+everything below was verified in.
 
 ### Web UI instead of the CLI ⚠️
 
@@ -203,22 +207,32 @@ What to look for:
 |---|---|---|
 | `"cloud_bytes": 0` | nothing went to a cloud | ✅ observed |
 | `"backend": "gpu"` | inference really ran on-device | ✅ observed |
-| `"approved_by_human": true` | a person released this answer | ⚠️ never yet emitted |
-| `"review_ms"` | how long they actually spent reading it | ⚠️ never yet emitted |
-| `"outcome": "rejected_by_human"` | the reject path — never charged | ⚠️ never yet emitted |
+| `"approved_by_human": true` | a person released this answer | ✅ observed |
+| `"edited_by_human": true` | they changed the wording before sending | ✅ observed |
+| `"review_ms"` | how long they actually spent reading it | ✅ observed |
+| `"outcome": "rejected_by_human"` | the reject path — never charged | ✅ observed |
 
-**Be precise about what exists today.** The two per-role logs are still **empty**, because they are
-only written by a completed consult and no consult has completed (discovery blocked — see
-[Troubleshooting](#troubleshooting)). The approval fields are wired end to end in code but have not
-been produced by a real run, so there is no genuine "full run" artifact to screenshot yet. Do not
-hand-assemble one: a fabricated audit log is the one artifact this demo cannot afford.
+A real captured session is committed as
+[`AUDIT_LOG.consult-sample.jsonl`](../AUDIT_LOG.consult-sample.jsonl) — three consults from one run,
+covering all three outcomes:
 
-What *is* real today: ✅ `npm run audit` reproduces the model-lifecycle + inference log with **no chain
-and no peer** — the quickest way to prove on-device MedPsy inference in isolation. It is what produced
-the committed sample showing `"backend":"gpu"` and `"cloud_bytes":0` on real clinical prompts.
+```
+approved=True  edited=True  review_ms=38693 backend=gpu  cloud_bytes=0 outcome=delivered
+approved=False edited=None  review_ms=3767  backend=None cloud_bytes=0 outcome=rejected_by_human
+approved=True  edited=False review_ms=7392  backend=gpu  cloud_bytes=0 outcome=delivered
+```
+
+That is the screenshot artifact: `approved_by_human` next to a `review_ms` in the thousands is the
+evidence a person actually read the draft, and the middle line is a health worker declining to send —
+never charged.
+
+**Settlement** is a separate on-chain step. The health worker batches vouchers and only claims once
+unclaimed earnings reach 0.05 USD₮, so a handful of consults may not trigger one. To see the full
+money lifecycle end to end (open → off-chain vouchers → claim → settle + close):
 
 ```bash
-npm run audit && cat AUDIT_LOG.jsonl
+npm run escrow-demo     # ✅ verified on the local chain: "spent = earned · channel closed · PASS"
+npm run audit           # ✅ model lifecycle + inference only — no chain, no peer
 ```
 
 ---
@@ -270,20 +284,15 @@ including opening the escrow channel — so nothing claimed on camera is hidden 
 
 Peer discovery failed. In order of likelihood:
 
-1. **Your network is not a LAN.** This is the one that cost an afternoon. On macOS, `en0` may be
-   `192.0.0.2/32` with `NOARP` — that's **iPhone USB tethering**, not a LAN, and Holepunch cannot
-   connect over it. Check:
+1. **Too few nodes in your local DHT.** This was the real blocker, and it is now fixed in
+   `npm run bootstrap` — but it is worth understanding, because the symptom is so misleading. hyperdht
+   does not connect peers directly; it coordinates through *other* DHT nodes, which must be
+   non-ephemeral and non-firewalled. A single `DHT.bootstrapper()` gives it nothing to relay through,
+   so the handshake half-completes: the client fires `connection`, the **server never does**, and zero
+   offer bytes move. It looks exactly like a NAT/firewall problem and is not one.
 
-   ```bash
-   ifconfig | grep -E "^[a-z0-9]+:|inet " | grep -v inet6
-   ```
-
-   You want a `192.168.x.x`, `10.x.x.x` or `172.16–31.x.x` address. A `/32` netmask has no subnet, so
-   no peer can route to it. Join real Wi-Fi or a hotspot.
-
-   ✅ Verified failure modes on such an interface: topic discovery half-connects (the client fires
-   `connection`, the server never does, zero offer bytes), direct connect-by-public-key times out, and
-   the public DHT never connects at all. All three are environmental, not bugs in this repo.
+   Measured on loopback: 1, 2 and 3 nodes all fail; **5 and 10 work.** `npm run bootstrap` now starts
+   10 and refuses fewer than 5. If you rolled your own bootstrap, that is the first thing to check.
 
 2. **The two roles are on different bootstraps.** Both must get the *same*
    `MEDCONSULT_BOOTSTRAP`, or both must omit it. Each prints its mode at startup —
@@ -291,6 +300,18 @@ Peer discovery failed. In order of likelihood:
    Read those two lines before debugging anything else.
 
 3. **`npm run sell` isn't actually up.** It must have printed `model ready`.
+
+4. **Your network is not a LAN** — this only matters for a *two-device* demo. On macOS, `en0` may be
+   `192.0.0.2/32` with `NOARP`, which is iPhone USB tethering, not a LAN: a `/32` has no subnet, so no
+   other device can route to it. Check with:
+
+   ```bash
+   ifconfig | grep -E "^[a-z0-9]+:|inet " | grep -v inet6
+   ```
+
+   You want `192.168.x.x`, `10.x.x.x` or `172.16–31.x.x`. `npm run bootstrap` already refuses to bind
+   a non-routable address and tells you which interfaces it skipped, falling back to loopback — which
+   is fine for both roles on one machine (✅ verified) but cannot serve a second device.
 
 ### `npm install` → `ENOTEMPTY … bare-runtime`
 

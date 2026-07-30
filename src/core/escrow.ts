@@ -57,8 +57,26 @@ export interface EscrowClient {
   withdraw(wallet: BaseWallet, seller: string): Promise<string>;
 }
 
+/**
+ * A JSON-RPC provider with ethers' response cache disabled.
+ *
+ * WHY: ethers v6 de-duplicates identical RPC requests made within 250 ms — including
+ * `eth_getTransactionCount`, which is how a nonce is chosen. Settlement sends two transactions
+ * back to back (`approve()` then `open()`), and on a local Hardhat chain both land inside that
+ * window, so the second reads the pre-`approve` nonce and the node rejects it:
+ *
+ *     Nonce too low. Expected nonce to be 6 but got 5.
+ *
+ * Invisible on Sepolia, where block times dwarf the cache, and fatal on the local chain — i.e. it
+ * only breaks the setup recommended for development. Every provider used for settlement must be
+ * built here rather than with `new JsonRpcProvider(...)` directly.
+ */
+export function makeProvider(rpcUrl: string): JsonRpcProvider {
+  return new JsonRpcProvider(rpcUrl, undefined, { cacheTimeout: -1 });
+}
+
 export function createEscrowClient(rpcUrl: string, address: string, chainId: number): EscrowClient {
-  const provider = new JsonRpcProvider(rpcUrl);
+  const provider = makeProvider(rpcUrl);
   const read: any = new Contract(address, ESCROW_ABI, provider);
   const domain = { name: 'ConduitEscrow', version: '1', chainId, verifyingContract: address };
   const value = (buyer: string, seller: string, epoch: bigint, cumulative: bigint) => ({ buyer, seller, epoch, cumulativeAmount: cumulative });
