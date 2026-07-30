@@ -469,6 +469,19 @@ body::after {
 .telemetry b { color: var(--muted); font-weight: 500; }
 .telemetry .ok { color: var(--mint); }
 
+/* Med-consult (fork): the disclaimer under every answer the asker receives. Persistent by design —
+   it sits inside the answer bubble so it cannot be scrolled away from the text it qualifies. */
+.disclaimer-inline {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border-radius: 7px;
+  background: var(--amber-soft);
+  border: 1px solid rgba(255, 196, 77, 0.34);
+  color: var(--amber);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 /* thinking */
 .thinking { display: inline-flex; gap: 5px; align-items: center; padding: 3px 0; }
 .thinking i {

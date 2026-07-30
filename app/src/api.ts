@@ -1,5 +1,8 @@
-// Typed client for the Conduit engine API (src/web/server.ts).
-export type Source = 'local' | 'paid' | 'declined';
+// Typed client for the engine API (src/web/server.ts).
+// Fork note: upstream had three outcomes — 'local' (free on-device draft), 'paid' (escalated to a
+// peer) and 'declined'. This device has no model, so 'local' and 'paid' collapse into a single
+// outcome: a 'consult' answered by a health worker peer and approved by a human.
+export type Source = 'consult' | 'declined';
 
 export interface Peer {
   id: string;
@@ -57,15 +60,22 @@ export interface SellersResp {
   selected: string;
 }
 
-export type DeclineReason = 'no-seller' | 'budget' | 'error';
+export type DeclineReason = 'no-peer' | 'budget' | 'rejected' | 'error';
 
 export interface AskResult {
   source: Source;
-  reason: DeclineReason | null; // why it fell back to local, when source === 'declined'
+  reason: DeclineReason | null; // why there is no answer, when source === 'declined'
   answer: string;
   note: string | null;
-  consistency: number;
   cost: string;
+  model: string | null;
+  healthWorker: string | null; // the health worker's earnings address
+  // Provenance of the answer — the point of the whole flow.
+  approvedByHuman: boolean;
+  edited: boolean; // the health worker changed the model's wording before sending
+  reviewMs: number | null; // how long the human spent reviewing
+  draftMs: number | null; // how long MedPsy took to draft
+  disclaimer?: string;
   stats: { ttftMs: number | null; tps: number | null };
   error?: string;
 }

@@ -3,7 +3,14 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { ChatMsg } from '../types';
 import type { AskResult } from '../api';
-import { Bolt, Coin, Local } from './icons';
+import { Coin, Local } from './icons';
+
+// The disclaimer the asker sees under every answer. Kept in sync with src/core/medconsult.ts —
+// the engine also sends it on each result, but a hardcoded fallback means it can never go missing
+// just because an older engine didn't send the field.
+const DISCLAIMER =
+  'AI-assisted draft, reviewed by a human health worker before sending. ' +
+  'Not a substitute for professional medical care in an emergency.';
 
 // USD₮ amounts here are micro-payments — fractions of a cent (0.002–0.02). Two decimals would
 // round them to "0.00", so show up to 4 decimals and trim trailing zeros (0.002, 0.005, 0.01).
@@ -14,8 +21,12 @@ function usdt(v: string | number): string {
   return n.toFixed(4).replace(/0+$/, '').replace(/\.$/, '');
 }
 
+function secs(ms: number | null): string {
+  return ms == null ? '—' : `${(ms / 1000).toFixed(1)}s`;
+}
+
 function Stamp({ r }: { r: AskResult }) {
-  if (r.source === 'paid') {
+  if (r.source === 'consult') {
     return (
       <motion.span
         className="stamp paid"
@@ -23,52 +34,40 @@ function Stamp({ r }: { r: AskResult }) {
         animate={{ scale: 1, opacity: 1 }}
         transition={{ type: 'spring', stiffness: 520, damping: 22 }}
       >
-        <Coin /> Peer GPU · paid {usdt(r.cost)} USD₮
+        <Coin /> Reviewed &amp; approved by a health worker · {usdt(r.cost)} USD₮
       </motion.span>
     );
   }
-  if (r.source === 'declined') {
-    // The router WANTED a remote peer, but we fell back to the local draft. Tell the user the real
-    // reason instead of always blaming the budget.
-    const label =
-      r.reason === 'no-seller' ? 'No peer online · on-device'
-      : r.reason === 'error' ? 'Peer unreachable · on-device'
-      : r.reason === 'budget' ? 'Budget reached · on-device'
-      : 'Answered on-device';
-    return (
-      <span className="stamp declined" title={r.note ?? undefined}>
-        <Local /> {label}
-      </span>
-    );
-  }
+  // No answer came back. Say which of the four reasons it was — a human declining to send is a
+  // legitimate outcome and must not read like a network error.
+  const label =
+    r.reason === 'no-peer' ? 'No health worker online'
+    : r.reason === 'rejected' ? 'Health worker did not approve'
+    : r.reason === 'budget' ? 'Budget reached · not sent'
+    : 'Consult did not complete';
   return (
-    <motion.span
-      className="stamp local"
-      initial={{ scale: 0.8, opacity: 0 }}
-      animate={{ scale: 1, opacity: 1 }}
-      transition={{ type: 'spring', stiffness: 520, damping: 22 }}
-    >
-      <Bolt /> On-device · free
-    </motion.span>
+    <span className="stamp declined" title={r.note ?? undefined}>
+      <Local /> {label}
+    </span>
   );
 }
 
 function Telemetry({ r }: { r: AskResult }) {
+  if (r.source !== 'consult') return null;
   return (
     <div className="telemetry">
-      <span>confidence <b>{r.consistency.toFixed(2)}</b></span>
-      {r.source === 'paid' && r.stats.tps ? (
-        <span><b>{Math.round(r.stats.tps)}</b> tok/s</span>
-      ) : null}
-      {r.source === 'paid' && r.stats.ttftMs ? (
-        <span>ttft <b>{Math.round(r.stats.ttftMs)}ms</b></span>
-      ) : null}
+      <span className="ok">human-approved</span>
+      {r.edited ? <span>edited before sending</span> : <span>sent as drafted</span>}
+      <span>review <b>{secs(r.reviewMs)}</b></span>
+      <span>draft <b>{secs(r.draftMs)}</b></span>
+      {r.stats.tps ? <span><b>{Math.round(r.stats.tps)}</b> tok/s</span> : null}
       <span className="ok">0 cloud bytes</span>
     </div>
   );
 }
 
 export default function Message({ m }: { m: ChatMsg }) {
+  const isConsult = m.result?.source === 'consult';
   return (
     <motion.div
       className={`msg ${m.role}`}
@@ -82,16 +81,25 @@ export default function Message({ m }: { m: ChatMsg }) {
         ) : m.pending ? (
           <div className="thinking">
             <i /><i /><i />
-            <span>routing your question…</span>
+            {/* The wait here is mostly a person reading, not a machine working — say so, or a
+                30-second pause looks like a hang. */}
+            <span>a health worker is drafting and reviewing your consult…</span>
           </div>
         ) : m.error ? (
           <div className="errline">⚠ {m.error}</div>
         ) : (
           <>
             {m.result && <Stamp r={m.result} />}
-            <div className="answer markdown">
-              <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
-            </div>
+            {m.result && m.result.source === 'declined' && m.result.note ? (
+              <div className="answer">{m.result.note}</div>
+            ) : (
+              <div className="answer markdown">
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown>
+              </div>
+            )}
+            {isConsult && (
+              <div className="disclaimer-inline">⚕ {m.result?.disclaimer ?? DISCLAIMER}</div>
+            )}
             {m.result && <Telemetry r={m.result} />}
           </>
         )}
