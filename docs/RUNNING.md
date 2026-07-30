@@ -340,6 +340,19 @@ Cosmetic. Use Node 22 LTS to silence it.
 It reads the chain you're actually connected to (`testnetNotice(chainId)`), so if it says
 "a local Hardhat chain" while you expected Sepolia, your `.env` is still pointed at `31337`.
 
+### Repeated `npm run ask` runs don't accumulate earnings
+
+Known issue, not yet fixed. Each `npm run ask` is a fresh process: it re-reads the channel and starts
+its voucher `cumulative` from the amount already *claimed* on-chain. The health worker resets its own
+session the same way on `sessionOpen`. So six one-shot CLI consults each draw a voucher for the same
+`cumulative` of 10000 rather than climbing 10000 → 60000, and the health worker can only ever claim
+the one payment — which also means the 0.05 USD₮ claim threshold never trips from CLI runs alone.
+
+It does not affect a long-lived asker (the desktop app or a phone), where `cumulative` climbs
+correctly within the session, and no voucher is ever double-spent — the effect is under-collection,
+not over-charging. Fixing it properly means persisting per-channel cumulative across processes.
+Use `npm run escrow-demo` to exercise claim/settle in the meantime.
+
 ### Reject path shows as an error on the asker
 
 It shouldn't — a human declining is a legitimate outcome. The asker should read *"Health worker did
