@@ -439,12 +439,22 @@ point) · `cloud_bytes = 0` throughout.
 > That is still a fully real demonstration of the same story — just not in-hand on phones. Say so
 > rather than shipping something flaky.
 
+### On phones
+
+The Expo/Bare client lives in [`mobile/`](./mobile) — same two roles, same wire protocol, so a phone
+and a laptop are interchangeable on either side of a consult. **It is scaffolded but has not yet been
+run on a device** (QVAC does not run on simulators, and no physical device was available); see
+[`mobile/README.md`](./mobile/README.md) for the architecture, the JSC/BigInt/local-network gotchas
+already handled, and the known gaps. Until it has had a real device run, the two-laptop path above is
+the dependable one for filming.
+
 ---
 
 ## Repository layout
 
 ```
 app/         React chat + wallet UI (Vite)
+mobile/      Expo/Bare client — Asker + Health Worker on physical phones      ← fork (unverified)
 contracts/   Hardhat workspace — ConduitEscrow.sol, MockUSDT, tests, deploy script
 electron/    desktop shell (spawns the engine as a child process)
 landing/     marketing site + /pitch deck (Next.js) — conduitt.xyz

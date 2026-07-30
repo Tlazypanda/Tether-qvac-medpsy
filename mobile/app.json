@@ -1,0 +1,61 @@
+{
+  "_comment": [
+    "Expo config for the med-consult phones. Values here are not arbitrary — the ones that matter are",
+    "called out below because getting any of them wrong fails at runtime on a device, which is the",
+    "slowest possible place to find out.",
+    "",
+    "  jsEngine: 'jsc'      QVAC's Bare bridge and the Holepunch stack are exercised on JSC, not Hermes.",
+    "                       Requires @react-native-community/javascriptcore + the with-android-jsc",
+    "                       plugin on Android (RN ships Hermes by default there).",
+    "  minSdkVersion 29     Required by @qvac/sdk on Android.",
+    "  newArchEnabled       react-native-bare-kit expects the new architecture.",
+    "  NSLocalNetworkUsage  iOS 14+ blocks local-network discovery until the user grants it. Without",
+    "  + NSAllowsLocal      this the airplane-mode LAN demo cannot find a peer AT ALL — the exact",
+    "    Networking         failure mode that looks like 'the DHT is broken'.",
+    "  usesCleartextTraffic Android: the asker talks to a LAN RPC / bootstrap over plain HTTP.",
+    "",
+    "Only physical devices — QVAC does not run on emulators or simulators (a llama.cpp limitation)."
+  ],
+  "expo": {
+    "name": "MedConsult",
+    "slug": "qvac-medconsult",
+    "scheme": "medconsult",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "jsEngine": "jsc",
+    "ios": {
+      "bundleIdentifier": "io.medconsult.demo",
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSLocalNetworkUsageDescription": "MedConsult connects directly to a health worker's device on your local network to send a consult and receive the reviewed answer. No data leaves the local network.",
+        "NSBonjourServices": ["_medconsult._udp", "_medconsult._tcp"],
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "io.medconsult.demo",
+      "usesCleartextTraffic": true,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
+        "android.permission.ACCESS_WIFI_STATE"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 29
+          }
+        }
+      ],
+      "@qvac/sdk/expo-plugin",
+      "expo-file-system"
+    ]
+  }
+}

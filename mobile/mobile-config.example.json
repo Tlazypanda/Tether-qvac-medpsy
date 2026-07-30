@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Copy to mobile-config.json (gitignored) and fill in PER DEVICE. Never commit a real key.",
+    "",
+    "bootstrap  The LAN-local DHT bootstrap printed by `npm run bootstrap` on a laptop or either",
+    "           phone. Omit entirely to use the public Holepunch DHT (needs internet).",
+    "wallet     This device's TESTNET wallet. The asker signs vouchers with it; the health worker",
+    "           only needs `address` (its earnings address). voucherDomain must match the deployed",
+    "           ConduitEscrow — see contracts/deployed.local.json or the Sepolia addresses in the",
+    "           root README. `epoch` is the channel epoch the asker opened WHILE STILL ONLINE.",
+    "offer      Health worker only: what this device advertises. priceBaseUnits is USD₮ base units",
+    "           (6 decimals), so 10000 = 0.01 USD₮ per consult."
+  ],
+  "bootstrap": [{ "host": "192.168.1.50", "port": 49737 }],
+  "wallet": {
+    "address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+    "privateKey": "0x<TESTNET_PRIVATE_KEY_ONLY>",
+    "payee": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "epoch": "1",
+    "cumulative": "0",
+    "voucherDomain": {
+      "name": "ConduitEscrow",
+      "version": "1",
+      "chainId": 31337,
+      "verifyingContract": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+    }
+  },
+  "offer": {
+    "sellerWallet": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "model": "HEALTHCARE_4B_MEDICAL_Q4_K_M",
+    "priceBaseUnits": "10000",
+    "tps": 25,
+    "token": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
+    "chainId": 31337,
+    "escrow": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512"
+  }
+}
