@@ -82,7 +82,7 @@ scratch; attribution and the Apache-2.0 licence are intact.
 | 2 | **Routing simplified** — the asker has no model, so there is no local draft and no confidence router. Every consult goes straight to a paid health-worker peer. `SpendPolicy` (per-call cap + session budget) is kept unchanged. | Upstream escalates to a peer only when a local draft looks weak. Here the payment's reason to exist is compensating a human's time and expertise, not covering for a weak device. |
 | 3 | **Human-approval gate (the main new feature)** — a consult is now a state machine: `queued → drafting → awaiting_review → approved \| rejected`. The draft parks on `awaiting_review` indefinitely and is **not sent anywhere** until a person decides. On approval the (possibly edited) answer is delivered **and** the voucher is signed in the same step; on rejection nothing is delivered and nothing is charged. | Unsupervised medical AI output is a real safety problem. Upstream's provider path returns inference automatically — there was no human in the loop to add. |
 | 4 | **A UI for the provider role** — upstream's seller is headless (`npm run sell`), with the only UI on the buyer side. The seller now serves its own dependency-free approval screen (SSE-streamed draft tokens, edit box, Approve/Reject), bound to loopback by default since it can release an answer and authorise a payment. | A human-approval gate needs a human-facing surface on the device doing the approving, and it has to read clearly on camera. |
-| 5 | **Rebrand + own DHT topic** — buyer/seller → Asker/Health Worker throughout; topic is `medconsult:demo:v1`, never upstream's live `conduit:market:v1`. | Keeps our testing off the live Conduit marketplace, and keeps real Conduit buyers away from a node that only speaks the consult protocol. |
+| 5 | **Rebrand + own DHT topic** — buyer/seller → Asker/Health Worker throughout, and the product surface (window title, wordmarks, boot screen, console banner) reads **MedConsult**; topic is `medconsult:demo:v1`, never upstream's live `conduit:market:v1`. Internal identifiers (`conduit:` storage keys, the `window.conduit` Electron bridge) and the `ConduitEscrow` contract name are deliberately unchanged — the contract name is part of the EIP-712 voucher domain, so renaming it would break signature verification. | Keeps our testing off the live Conduit marketplace, and keeps real Conduit buyers away from a node that only speaks the consult protocol. Attribution stays in the licence and this README, where Apache-2.0 requires it. |
 | 6 | **Persistent medical disclaimer** — on the health worker's approval screen and inside the asker's answer bubble (so it cannot be scrolled away from the text it qualifies). | Mirrors QVAC MedPsy's own framing: an assistant, not a doctor. |
 | 7 | **Offline discovery** (`src/core/swarm.ts`, `npm run bootstrap`) — optional LAN-local DHT bootstrap via `MEDCONSULT_BOOTSTRAP=host:port`. Unset leaves upstream's public-DHT behaviour unchanged. | Upstream's nodes bootstrap off the **public** Holepunch DHT, which needs the internet. This demo claims airplane mode, so discovery has to work with no route out. |
 | 8 | **Local test chain** (`contracts/scripts/deploy-local.ts`) — deploy MockUSDT + ConduitEscrow to a throwaway Hardhat chain and fund both roles. | Upstream only ships a Sepolia deploy, so the full loop needed a faucet round trip. This makes the approval gate testable with no faucet and no real keys. |
@@ -185,11 +185,14 @@ node -e "const s=require('@qvac/sdk'); console.log('MedPsy:', !!s.HEALTHCARE_4B_
 cp .env.example .env
 
 # 4. Either: a local chain, no faucet needed (see docs/RUNNING.md §2)
+#    Run BOTH from inside contracts/ — hardhat resolves script paths against your shell's cwd,
+#    so from the repo root this fails with "HH601: Script ... doesn't exist".
 cd contracts && npx hardhat node                                    # terminal 1
 cd contracts && npx hardhat run scripts/deploy-local.ts --network localhost   # terminal 2
 #     Or:  fund the ASKER wallet (account 0) with Sepolia ETH + test USD₮
 
-# 5. Benchmark the health worker's machine → bench-profile.json
+# 5. Benchmark the health worker's machine → bench-profile.json (gitignored; every machine
+#    generates its own. See bench-profile.example.json for the shape.)
 npm run bench                   # confirm "backend": "gpu" and the MedPsy model
 
 # 6. Pre-download the model once (~2.7 GB), then Ctrl-C
@@ -208,17 +211,23 @@ Copy `.env.example` → `.env` and fill in. Both roles read this file. **Testnet
 
 | Variable | Required | Default | Purpose |
 |----------|----------|---------|---------|
-| `CONDUIT_WALLET_MNEMONIC` | ✅ | — | BIP-39 seed phrase (testnet). Account 0 = buyer, account 1 = seller earnings. |
+| `CONDUIT_WALLET_MNEMONIC` | ✅ | — | BIP-39 seed phrase (testnet). Account 0 = asker, account 1 = health worker earnings. |
 | `CONDUIT_RPC_URL` | ✅ | `https://rpc.sepolia.org` | EVM **testnet RPC** — the only remote service, non-AI, settlement only. |
-| `CONDUIT_CHAIN_ID` | ✅ | `11155111` | Sepolia chain id. |
+| `CONDUIT_CHAIN_ID` | ✅ | `11155111` | Chain id. Use `31337` for the local Hardhat chain. |
 | `CONDUIT_USDT_ADDRESS` | ✅ | — | Test USD₮ token contract (see below). |
-| `CONDUIT_ESCROW` | — | `0` | `1` enables the instant escrow payment-channel path (recommended). |
+| `CONDUIT_ESCROW` | — | `0` | `1` enables the escrow payment-channel path (recommended). |
 | `CONDUIT_ESCROW_ADDRESS` | when escrow on | — | Deployed `ConduitEscrow` contract (see below). |
-| `CONDUIT_SEED` | — | random | 64-hex seed for a deterministic Hyperswarm identity. |
-| `CONDUIT_SELLER_MNEMONIC` | — | — | Run the seller from a different wallet than the buyer. |
-| `CONDUIT_SELLER_MODEL` | — | prober's pick | Force the seller to serve a specific model. |
-| `CONDUIT_VERIFY` | — | `0` | `1` adds a self-critique pass on confident local answers. |
+| `MEDCONSULT_BOOTSTRAP` | — | public DHT | `host:port` of a LAN-local DHT from `npm run bootstrap`. **Both roles must match.** |
+| `HW_UI_HOST` | — | `127.0.0.1` | Approval-screen bind address. `0.0.0.0` to review from another device — see the warning below. |
+| `HW_UI_PORT` | — | `8799` | Approval-screen port. |
+| `CONDUIT_SELLER_MNEMONIC` | — | — | Run the health worker from a different wallet than the asker. |
+| `CONDUIT_SELLER_MODEL` | — | prober's pick | Force the health worker to serve a specific model. |
+| `CONDUIT_NO_ENV_WALLET` | — | `0` | `1` disables the dev auto-unlock and requires the encrypted keystore + password. |
+| `MAX_PER_CALL` / `MAX_BUDGET` | — | `100000` / `1000000` | Asker spend caps, in USD₮ base units (6 dp). |
 | `PORT` | — | `8788` | Web/engine API port. |
+
+> **The approval screen binds to loopback on purpose.** It can release a medical answer and authorise
+> a payment. Only set `HW_UI_HOST=0.0.0.0` on a network you trust, and never on public Wi-Fi.
 
 > The packaged desktop app ships with escrow **on by default** and the contract address baked in — no
 > `.env` needed for paid answers there.
@@ -288,6 +297,27 @@ Both join the Hyperswarm topic `medconsult:demo:v1`; discovery and NAT hole-punc
 Omit `MEDCONSULT_BOOTSTRAP` to use the public Holepunch DHT as upstream does (needs internet to
 bootstrap). The draft waits on the approval screen — **nothing reaches the asker until a human taps
 Approve & Send.** Full sequence: [shoot-day checklist](#reproducing-the-demo-shoot-day-checklist).
+
+> **Both roles must be given the *same* `MEDCONSULT_BOOTSTRAP`**, or both must omit it. A mismatch
+> is the single most common failure and presents as `no health worker found in 30s`. Each role prints
+> its discovery mode at startup — read those two lines before debugging anything else.
+
+### Your network has to be a real LAN
+
+`npm run bootstrap` binds the first **RFC1918** address it finds (`192.168.x.x`, `10.x.x.x`,
+`172.16–31.x.x`). If it can't find one it falls back to loopback and tells you which interfaces it
+skipped — fine for both roles on one machine, useless for two devices.
+
+Two setups that look like a LAN but are not:
+
+- **An iPhone Personal Hotspot in IPv6/NAT64 mode** hands out `192.0.0.2/32` with `NOARP`. A `/32` is
+  a subnet of exactly one host, so no other device can route to you — and the phone can't even be
+  pinged from its own client. On iOS, **Personal Hotspot → Maximize Compatibility** forces standard
+  IPv4 (`172.20.10.x`), which does work.
+- **An active VPN.** Check that no `utun` interface holds your default route before blaming discovery.
+
+If you only need a phone to *view* the asker UI rather than be a peer, you don't need any of this —
+see [On phones](#on-phones).
 
 ### Chat + wallet web app
 ```bash
@@ -466,12 +496,29 @@ point) · `cloud_bytes = 0` throughout.
 
 ### On phones
 
-The Expo/Bare client lives in [`mobile/`](./mobile) — same two roles, same wire protocol, so a phone
-and a laptop are interchangeable on either side of a consult. **It is scaffolded but has not yet been
-run on a device** (QVAC does not run on simulators, and no physical device was available); see
+There are two ways to get a phone into this, and they are very different.
+
+**1. The phone as a browser — works today, no build required.** Run the asker web app on a laptop and
+open it from the phone. `npm run web` binds all interfaces, so any device on the same network can
+reach `http://<laptop-lan-ip>:8788`, with the health worker's approval screen staying on the laptop
+at `:8799`. This is the quickest way to demo the loop on a phone screen, and both roles still run
+locally over loopback so none of the LAN-discovery caveats above apply.
+
+Be precise about what it shows: **the phone is a display, not a peer.** Both P2P endpoints are
+processes on the laptop. On-device inference and the human approval gate are genuine; device-to-device
+P2P is not being demonstrated. If the two machines can't see each other directly, a mesh VPN such as
+[Tailscale](https://tailscale.com) will bridge them — but that relays your UI traffic over the
+internet, so don't pair it with an "offline" or "airplane mode" claim. The inference stays local
+either way, and `cloud_bytes: 0` remains true, because it measures the consult path and not your
+browser transport.
+
+**2. The phone as a real peer — not yet verified.** The Expo/Bare client lives in
+[`mobile/`](./mobile) — same two roles, same wire protocol, so a phone and a laptop are
+interchangeable on either side of a consult. **It is scaffolded but has not yet been run on a device**
+(QVAC does not run on simulators, and no physical device was available); see
 [`mobile/README.md`](./mobile/README.md) for the architecture, the JSC/BigInt/local-network gotchas
-already handled, and the known gaps. Until it has had a real device run, the two-laptop path above is
-the dependable one for filming.
+already handled, and the known gaps. Building it needs full Xcode and an Apple Developer account.
+Until it has had a real device run, the two-laptop path above is the dependable one for filming.
 
 ---
 

@@ -170,7 +170,7 @@ function createWindow(url: string): void {
     minWidth: 880,
     minHeight: 600,
     backgroundColor: '#0E1217', // matches the app's ink background — no white flash on load
-    title: 'Conduit',
+    title: 'MedConsult',
     icon: path.join(__dirname, 'icon.png'), // taskbar / window icon (Linux & Windows; macOS uses the .icns)
     show: false,
     webPreferences: {

@@ -25,8 +25,8 @@ export default function TopBar({
       <div className="tb-brand">
         <Mark size={26} />
         <div>
-          <div className="wordmark">Conduit</div>
-          <div className="tag">P2P inference · USD₮</div>
+          <div className="wordmark">MedConsult</div>
+          <div className="tag">Peer-to-peer consults · USD₮</div>
         </div>
       </div>
 

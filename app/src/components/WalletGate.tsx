@@ -100,7 +100,7 @@ export default function WalletGate({ status, onUnlocked }: { status: WalletStatu
       <div className="gate-card rise">
         <div className="gate-brand">
           <Mark size={34} />
-          <div className="wordmark">Conduit</div>
+          <div className="wordmark">MedConsult</div>
         </div>
 
         {view === 'choose' && (

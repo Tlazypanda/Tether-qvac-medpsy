@@ -37,8 +37,7 @@
     "dist": "npm run app:build && npm run engine:build && npm run electron:build && electron-builder",
     "dist:dir": "npm run app:build && npm run engine:build && npm run electron:build && electron-builder --dir",
     "spike:firewall": "tsx src/spikes/01-firewall/run.ts",
-    "spike:settle": "tsx src/spikes/02-settlement/run.ts",
-    "spike:delegate": "tsx src/spikes/03-prober-delegate/run.ts"
+    "spike:settle": "tsx src/spikes/02-settlement/run.ts"
   },
   "build": {
     "appId": "org.conduit.app",

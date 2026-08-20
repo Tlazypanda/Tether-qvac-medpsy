@@ -142,7 +142,7 @@ export default function App() {
     return (
       <div className="boot">
         <Mark size={40} />
-        <span>starting Conduit…</span>
+        <span>starting MedConsult…</span>
       </div>
     );
   }

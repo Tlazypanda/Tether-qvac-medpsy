@@ -39,7 +39,7 @@ export default function Composer({
           ref={ref}
           rows={1}
           value={value}
-          placeholder="Ask Conduit anything…"
+          placeholder="Describe your symptoms…"
           onChange={(e) => {
             setValue(e.target.value);
             grow();

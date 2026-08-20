@@ -39,12 +39,12 @@ const RESOURCES = process.env.CONDUIT_RESOURCES || path.join(here, '../..');
 const appDist = path.join(RESOURCES, 'app/dist'); // built React app (npm run app:build)
 
 // Shown only when the React app hasn't been built yet (app/dist missing) — a short prompt, not a 404.
-const buildPrompt = `<!doctype html><html><head><meta charset="utf-8"><title>Conduit</title>
+const buildPrompt = `<!doctype html><html><head><meta charset="utf-8"><title>MedConsult</title>
 <style>html,body{height:100%;margin:0}body{background:#0E1217;color:#E7F0EF;font:16px/1.6 system-ui,-apple-system,sans-serif;display:grid;place-items:center}
 .c{max-width:460px;padding:32px;text-align:center}h1{color:#2BE3A8;font-weight:600;margin:0 0 14px}
 code{background:#16202b;border:1px solid #22303a;border-radius:6px;padding:3px 9px;color:#2BE3A8;font-family:ui-monospace,monospace;font-size:14px}
 p{color:#8A9AA6;margin:10px 0}</style></head>
-<body><div class="c"><h1>⬡ Conduit</h1><p>The web UI isn't built yet. Run:</p>
+<body><div class="c"><h1>⬡ MedConsult</h1><p>The web UI isn't built yet. Run:</p>
 <p><code>npm run app:install</code></p><p><code>npm run app:build</code></p>
 <p>then refresh — or <code>npm run start</code> to build &amp; serve in one step.</p></div></body></html>`;
 
@@ -367,7 +367,7 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, () => {
   const built = existsSync(path.join(appDist, 'index.html'));
   const w = walletStatus();
-  console.log(`\n  ⬡ Conduit — open  →  http://localhost:${PORT}\n`);
+  console.log(`\n  ⬡ MedConsult — open  →  http://localhost:${PORT}\n`);
   console.log(`  wallet: ${w.unlocked ? `unlocked ${w.address}` : w.exists ? 'locked (enter password)' : 'none yet (create or import in the app)'}`);
   if (!built) console.log('  note: React app not built — run `npm run app:build` for the UI (showing a build prompt until then).');
   console.log('  warming up the local model…\n');

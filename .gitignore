@@ -28,6 +28,11 @@ AUDIT_LOG.health-worker.jsonl
 models/
 *.gguf
 
+# machine-specific probe output from `npm run bench` — every device must generate its own, or the
+# health worker advertises throughput it cannot deliver. bench-profile.example.json is committed
+# as a reference for the shape.
+bench-profile.json
+
 # os / editor
 .DS_Store
 .idea/

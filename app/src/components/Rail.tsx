@@ -44,8 +44,8 @@ export default function Rail({
         <div className="brand rise" style={{ animationDelay: '40ms' }}>
           <Mark size={30} />
           <div>
-            <div className="wordmark">Conduit</div>
-            <div className="tag">P2P inference · USD₮</div>
+            <div className="wordmark">MedConsult</div>
+            <div className="tag">Peer-to-peer consults · USD₮</div>
           </div>
         </div>
 
