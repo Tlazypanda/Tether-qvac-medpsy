@@ -4,6 +4,7 @@ electron/dist/
 dist-engine/
 release/
 *.log
+.git
 
 # hardhat (contracts/) build output — keep the .sol sources + tests, drop generated artifacts
 contracts/artifacts/
